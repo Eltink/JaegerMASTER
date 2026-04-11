@@ -13,8 +13,8 @@ BTN_RANDOM_PIN  = 5                # Pin 29
 BTN_PUMPE_PIN   = 16                # Pin 36
 
 # --- Setup ---
-ventile = [OutputDevice(p, active_high=False, initial_value=False) for p in VENTIL_PINS]
-pumpe   = OutputDevice(PUMPE_PIN, active_high=False, initial_value=False)
+ventile = [OutputDevice(p, active_high=True, initial_value=False) for p in VENTIL_PINS]
+pumpe   = OutputDevice(PUMPE_PIN, active_high=True, initial_value=False)
 
 # --- Zustand ---
 aktive_ventil_index = None  # welches Ventil gerade vom Random-Knopf geöffnet wurde
