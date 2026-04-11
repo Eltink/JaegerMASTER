@@ -8,7 +8,7 @@ import random
 # --- Display ---
 LCD_ADRESSE = 0x27
 lcd = CharLCD(i2c_expander='PCF8574', address=LCD_ADRESSE,
-              port=1, cols=20, rows=4, dotsize=8)
+              port=1, cols=16, rows=2, dotsize=8)
 
 def lcd_print(zeile1="", zeile2="", zeile3="", zeile4=""):
     lcd.clear()
