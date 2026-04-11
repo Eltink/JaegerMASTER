@@ -10,12 +10,10 @@ LCD_ADRESSE = 0x27
 lcd = CharLCD(i2c_expander='PCF8574', address=LCD_ADRESSE,
               port=1, cols=20, rows=4, dotsize=8)
 
-def lcd_print(zeile1="", zeile2="", zeile3="", zeile4=""):
+def lcd_print(zeile1="", zeile2=""):
     lcd.clear()
-    lcd.cursor_pos = (0, 0); lcd.write_string(zeile1[:20])
-    lcd.cursor_pos = (1, 0); lcd.write_string(zeile2[:20])
-    lcd.cursor_pos = (2, 0); lcd.write_string(zeile3[:20])
-    lcd.cursor_pos = (3, 0); lcd.write_string(zeile4[:20])
+    lcd.cursor_pos = (0, 0); lcd.write_string(zeile1[:16])
+    lcd.cursor_pos = (1, 0); lcd.write_string(zeile2[:16])
 
 # --- Konfiguration Dispenser ---
 VENTIL_PINS     = [22, 27, 23, 25]  # GPIO → Pin 15, 13, 16, 22
@@ -50,7 +48,7 @@ def ampel_aus():
 
 # --- PvP Zustand ---
 pvp_aktiv  = False
-pvp_bereit = False  # True = Grün leuchtet, Spieler dürfen drücken
+pvp_bereit = False
 pvp_thread = None
 pvp_lock   = threading.Lock()
 
@@ -61,31 +59,33 @@ pvp_lock   = threading.Lock()
 def ventil_sequenz(ventil, stop_event):
     idx = ventile.index(ventil) + 1
     ventil.on()
-    lcd_print("Shot Dispenser", f"Ventil {idx} offen", "Warte 1 Sekunde...", "")
+    lcd_print(f"Ventil {idx} offen", "Warte 1 Sek...")
     print(f"Ventil {idx} → OFFEN")
 
     for _ in range(10):
         if stop_event.is_set():
             ventil.off()
-            lcd_print("Shot Dispenser", f"Ventil {idx} geschlossen", "Abgebrochen", "")
+            lcd_print(f"Ventil {idx} zu", "Abgebrochen")
+            print(f"Ventil {idx} → GESCHLOSSEN (abgebrochen)")
             sleep(1)
-            lcd_print("Shot Dispenser", "Bereit!", "", "Knopf druecken...")
+            lcd_print("Shot Dispenser", "Bereit!")
             return
         sleep(0.1)
 
     pumpe.on()
-    lcd_print("Shot Dispenser", f"Ventil {idx} offen", "Pumpe laeuft...", "Knopf loslassen!")
+    lcd_print(f"Ventil {idx} offen", "Pumpe laeuft...")
     print("Pumpe → START")
 
     stop_event.wait()
 
     pumpe.off()
-    lcd_print("Shot Dispenser", f"Ventil {idx} offen", "Pumpe gestoppt", "Ventil schliesst...")
+    lcd_print("Pumpe gestoppt", "Ventil schliesst")
     print("Pumpe → STOP")
     sleep(0.5)
     ventil.off()
+    print(f"Ventil {idx} → GESCHLOSSEN")
     sleep(1)
-    lcd_print("Shot Dispenser", "Bereit!", "", "Knopf druecken...")
+    lcd_print("Shot Dispenser", "Bereit!")
 
 def mache_ventil_handler(index):
     stop_event = threading.Event()
@@ -119,6 +119,7 @@ def random_press():
     if pvp_aktiv:
         return
     idx = naechstes_random_ventil()
+    print(f"Random → Ventil {idx+1}")
     random_stop_event.clear()
     threading.Thread(target=ventil_sequenz, args=(ventile[idx], random_stop_event)).start()
 
@@ -129,11 +130,13 @@ def pumpe_press():
     if pvp_aktiv:
         return
     pumpe.on()
-    lcd_print("Shot Dispenser", "Pumpe manuell", "laeuft...", "Knopf loslassen!")
+    lcd_print("Pumpe manuell", "Knopf loslassen!")
+    print("Pumpe → START (manuell)")
 
 def pumpe_release():
     pumpe.off()
-    lcd_print("Shot Dispenser", "Bereit!", "", "Knopf druecken...")
+    lcd_print("Shot Dispenser", "Bereit!")
+    print("Pumpe → STOP (manuell)")
 
 # =====================
 #     PvP LOGIK
@@ -143,17 +146,18 @@ def pvp_spiel():
     global pvp_aktiv, pvp_bereit
 
     ampel_aus()
-    lcd_print("=== PvP Modus ===", "Macht euch bereit!", "", "")
+    lcd_print("=== PvP ===", "Bereit machen!")
+    sleep(1)
 
     # Rot → 1 Sekunde
     led_rot.on()
-    lcd_print("=== PvP Modus ===", "  Bereit machen!", "       ROT", "")
+    lcd_print("=== PvP ===", "ROT...")
     sleep(1)
 
     # Gelb → zufälliger Delay 0.1–4 Sekunden
     led_rot.off()
     led_gelb.on()
-    lcd_print("=== PvP Modus ===", "  Gleich los...", "       GELB", "")
+    lcd_print("=== PvP ===", "GELB...")
     delay = random.uniform(0.1, 4)
     sleep(delay)
 
@@ -161,7 +165,7 @@ def pvp_spiel():
     led_gelb.off()
     led_gruen.on()
     pvp_bereit = True
-    lcd_print("=== PvP Modus ===", "", "  >>> JETZT! <<<", "")
+    lcd_print("=== PvP ===", ">>> JETZT! <<<")
     print("Signal! Drücken!")
 
     # Timeout 10 Sekunden
@@ -170,50 +174,45 @@ def pvp_spiel():
             break
         sleep(0.1)
 
-    # Timeout ohne Gewinner
     if pvp_aktiv:
         pvp_reset()
-        lcd_print("=== PvP Modus ===", "  Zu langsam!", "Niemand gewinnt!", "")
+        lcd_print("Zu langsam!", "Niemand gewinnt!")
         print("Timeout!")
         sleep(2)
-        lcd_print("Shot Dispenser", "Bereit!", "", "Knopf druecken...")
+        lcd_print("Shot Dispenser", "Bereit!")
 
 def pvp_gewinner(spieler):
     global pvp_aktiv, pvp_bereit
 
     with pvp_lock:
         if not pvp_bereit:
-            # Zu früh gedrückt!
             ampel_aus()
             led_gelb.blink(on_time=0.1, off_time=0.1, n=5)
-            lcd_print("=== PvP Modus ===", f"   Spieler {spieler}", "   ZU FRUEH!", "")
+            lcd_print(f"Spieler {spieler}", "ZU FRUEH!")
             print(f"Spieler {spieler} hat zu früh gedrückt!")
             pvp_reset()
             sleep(2)
-            lcd_print("Shot Dispenser", "Bereit!", "", "Knopf druecken...")
+            lcd_print("Shot Dispenser", "Bereit!")
             return
 
         if not pvp_aktiv:
-            return  # Bereits ein Gewinner
+            return
 
         pvp_aktiv  = False
         pvp_bereit = False
 
-    # Grün aus
     led_gruen.off()
 
     if spieler == 1:
-        # Linker Spieler → Rot an
         led_rot.on()
-        lcd_print("=== PvP Modus ===", "   SPIELER LINKS", "   GEWINNT!", "Knopf=neu starten")
+        lcd_print("SPIELER LINKS", "GEWINNT!")
         print("Spieler 1 (Links) gewinnt!")
     else:
-        # Rechter Spieler → Grün an
         led_gruen.on()
-        lcd_print("=== PvP Modus ===", "  SPIELER RECHTS", "   GEWINNT!", "Knopf=neu starten")
+        lcd_print("SPIELER RECHTS", "GEWINNT!")
         print("Spieler 2 (Rechts) gewinnt!")
 
-    # Licht bleibt an bis PvP Knopf gedrückt wird (kein sleep/reset hier!)
+    # Licht bleibt an bis PvP Knopf gedrückt wird
 
 def pvp_reset():
     global pvp_aktiv, pvp_bereit
@@ -223,11 +222,8 @@ def pvp_reset():
 
 def pvp_start_press():
     global pvp_aktiv, pvp_thread
-
     if pvp_aktiv:
         return
-
-    # Egal ob Gewinner-Licht an oder nicht → neu starten
     pvp_reset()
     pvp_aktiv  = True
     pvp_thread = threading.Thread(target=pvp_spiel)
@@ -272,6 +268,6 @@ btn_s1.when_pressed  = spieler1_press
 btn_s2.when_pressed  = spieler2_press
 
 # --- Start ---
-lcd_print("Shot Dispenser", "Bereit!", "", "Knopf druecken...")
+lcd_print("Shot Dispenser", "Bereit!")
 print("Shot Dispenser bereit!")
 pause()
