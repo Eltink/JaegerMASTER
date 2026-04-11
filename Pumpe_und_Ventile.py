@@ -32,7 +32,7 @@ def ventil_sequenz(ventil, stop_event):
             print(f"Ventil {ventile.index(ventil)+1} → GESCHLOSSEN (abgebrochen)")
             return
         sleep(0.1)
-
+    
     pumpe.on()
     print("Pumpe → START")
 
@@ -41,7 +41,7 @@ def ventil_sequenz(ventil, stop_event):
 
     pumpe.off()
     print("Pumpe → STOP")
-    sleep(0.05)
+    sleep(0.5)
     ventil.off()
     print(f"Ventil {ventile.index(ventil)+1} → GESCHLOSSEN")
 
