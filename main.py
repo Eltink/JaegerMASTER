@@ -15,7 +15,7 @@ lcd = CharLCD(i2c_expander='PCF8574', address=LCD_ADDRESS,
               port=1, cols=20, rows=4, dotsize=8)
 
 MSG = {
-    "title":           "Shot Dispenser",
+    "title":           "Mystery Shot Box",
     "ready":           "Pronto!",
     "press_button":    "Aperte o botao...",
     "valve_open":      "Valvula {} aberta",
@@ -27,7 +27,7 @@ MSG = {
     "pump_manual":     "Bomba manual",
     "release_button":  "Solte o botao!",
     "cancelled":       "Cancelado",
-    "pvp_title":       "=== Modo PvP ===",
+    "pvp_title":       "===== Modo PvP =====",
     "pvp_get_ready":   "Preparem-se!",
     "pvp_prepare":     "Preparar!",
     "pvp_red":         "VERMELHO",
