@@ -7,7 +7,7 @@ BUTTON_PUMPE_PIN  = 19   # GPIO19 → Pin 35
 BUTTON_BEIDE_PIN  = 16   # GPIO16 → Pin 36
 
 VENTIL_PIN = 17   # GPIO17 → Pin 11
-PUMPE_PIN  = 24   # GPIO24 → Pin 18
+PUMPE_PIN  = 22   # GPIO22 → Pin 15  ← geändert
 
 # --- Setup ---
 btn_ventil = Button(BUTTON_VENTIL_PIN, pull_up=True, bounce_time=0.05)
