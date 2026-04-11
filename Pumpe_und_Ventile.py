@@ -5,12 +5,12 @@ import threading
 import random
 
 # --- Konfiguration ---
-VENTIL_PINS  = [17, 27, 22, 23]  # GPIO → Pin 11, 13, 15, 16
-PUMPE_PIN    = 25                 # GPIO25 → Pin 22
+VENTIL_PINS  = [22, 27, 23, 25]  # GPIO → Pin 15, 13, 16, 22
+PUMPE_PIN    = 17                 # GPIO17 → Pin 11
 
-BTN_VENTIL_PINS = [13, 19, 16, 20]  # Pin 33, 35, 36, 38
-BTN_RANDOM_PIN  = 21                # Pin 40
-BTN_PUMPE_PIN   = 26                # Pin 37
+BTN_VENTIL_PINS = [26, 19, 13, 6]  # Pin 37, 35, 33, 31
+BTN_RANDOM_PIN  = 5                # Pin 29
+BTN_PUMPE_PIN   = 16                # Pin 36
 
 # --- Setup ---
 ventile = [OutputDevice(p, active_high=False, initial_value=False) for p in VENTIL_PINS]
