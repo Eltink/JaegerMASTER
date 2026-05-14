@@ -4,6 +4,7 @@ import random
 import time
 import unittest
 
+from shot_dispenser.commands import Control, OperatorInput
 from shot_dispenser.config import TimingConfig
 from shot_dispenser.controller import RunningAction, ShotDispenserController
 from shot_dispenser.display import Display
@@ -17,12 +18,17 @@ class MemoryDisplay:
 
     def __init__(self) -> None:
         self.history: list[tuple[str, ...]] = []
+        self.reset_count = 0
 
     def show_lines(self, *lines: str) -> None:
         self.history.append(tuple(lines))
 
     def clear(self) -> None:
         self.history.append(())
+
+    def reset(self) -> None:
+        self.reset_count += 1
+        self.history.append(("<reset>",))
 
 
 class ControllerTests(unittest.TestCase):
@@ -89,6 +95,17 @@ class ControllerTests(unittest.TestCase):
         self.assertFalse(self.hardware.red)
         self.assertFalse(self.hardware.yellow)
         self.assertFalse(self.hardware.green)
+        self.assertEqual(0, self.display.reset_count)
+
+    def test_operator_safe_stop_resets_display(self) -> None:
+        self.controller.handle_input(OperatorInput(Control.STOP_ALL, pressed=True))
+
+        self.assertEqual(1, self.display.reset_count)
+        self.assertEqual(("<reset>",), self.display.history[-2])
+        self.assertEqual(
+            ("Mystery Shot Box", "Parada segura", "operator", ""),
+            self.display.history[-1],
+        )
 
     def test_cleanup_uses_configured_pump_count(self) -> None:
         hardware = FakeHardware(pump_count=2)

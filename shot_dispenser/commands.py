@@ -15,6 +15,7 @@ class Control(str, Enum):
     PLAYER_LEFT = "player_left"
     PLAYER_RIGHT = "player_right"
     STOP_ALL = "stop_all"
+    SHUTDOWN = "shutdown"
 
 
 @dataclass(frozen=True)
@@ -33,4 +34,3 @@ PUMP_CONTROLS = {
     Control.PUMP_3: 3,
     Control.PUMP_4: 4,
 }
-

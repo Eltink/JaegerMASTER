@@ -3,9 +3,11 @@ from __future__ import annotations
 import argparse
 import atexit
 import signal
+import subprocess
 import threading
 from collections.abc import Callable
 
+from .commands import Control, OperatorInput
 from .config import AppConfig, GpioPins, LcdConfig, NumpadConfig, parse_lcd_address
 from .controller import ShotDispenserController
 from .display import ConsoleDisplay, LcdDisplay
@@ -53,6 +55,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--terminal-control",
         action="store_true",
         help="Read explicit test commands from the terminal instead of an input device.",
+    )
+    parser.add_argument(
+        "--shutdown-command",
+        nargs=argparse.REMAINDER,
+        help=(
+            "Command to run after the operator shutdown chord. Put this last, "
+            "for example: --shutdown-command sudo -n /usr/sbin/poweroff"
+        ),
     )
     pump_polarity = parser.add_mutually_exclusive_group()
     pump_polarity.add_argument(
@@ -111,13 +121,21 @@ def main(argv: list[str] | None = None) -> int:
 
     atexit.register(shutdown_once, "process exit")
     controller.show_ready()
+    handle_input = _make_input_handler(
+        controller,
+        shutdown_once,
+        args.shutdown_command,
+    )
 
     try:
         if args.terminal_control:
-            TerminalInputRunner(controller.handle_input).run_forever()
+            TerminalInputRunner(handle_input).run_forever()
         else:
-            mapper = NumpadKeyMapper(config.numpad.key_bindings)
-            numpad = EvdevNumpadInput(config.numpad, mapper, controller.handle_input)
+            mapper = NumpadKeyMapper(
+                config.numpad.key_bindings,
+                config.numpad.shutdown_chord,
+            )
+            numpad = EvdevNumpadInput(config.numpad, mapper, handle_input)
             numpad.run_forever(stop_event)
     except KeyboardInterrupt:
         shutdown_once("keyboard interrupt")
@@ -127,6 +145,28 @@ def main(argv: list[str] | None = None) -> int:
         display.show_lines(DEFAULT_MESSAGES.title, DEFAULT_MESSAGES.input_error, str(exc)[: display.columns])
         raise
     return 0
+
+
+def _make_input_handler(
+    controller: ShotDispenserController,
+    shutdown_once: Callable[[str], None],
+    shutdown_command: list[str] | None = None,
+) -> Callable[[OperatorInput], None]:
+    def handle_input(operator_input: OperatorInput) -> None:
+        if operator_input.control is Control.SHUTDOWN:
+            if operator_input.pressed:
+                shutdown_once("operator shutdown")
+                _run_shutdown_command(shutdown_command)
+            return
+        controller.handle_input(operator_input)
+
+    return handle_input
+
+
+def _run_shutdown_command(command: list[str] | None) -> None:
+    if not command:
+        return
+    subprocess.Popen(command)
 
 
 def _print_input_devices() -> int:

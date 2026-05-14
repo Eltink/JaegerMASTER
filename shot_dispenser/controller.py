@@ -91,7 +91,7 @@ class ShotDispenserController:
         elif control is Control.PLAYER_RIGHT:
             self.player_pressed(2)
         elif control is Control.STOP_ALL:
-            self.safe_stop("operator")
+            self.safe_stop("operator", reset_display=True)
 
     def start_pump(self, pump_number: int) -> bool:
         if pump_number not in self._pump_numbers:
@@ -165,7 +165,7 @@ class ShotDispenserController:
             self._handle_winner(player, action)
         return True
 
-    def safe_stop(self, reason: str) -> None:
+    def safe_stop(self, reason: str, reset_display: bool = False) -> None:
         with self._state_lock:
             action = self._active_action
             self._active_action = None
@@ -176,6 +176,8 @@ class ShotDispenserController:
                 action.stop_event.set()
 
         self._hardware.all_off()
+        if reset_display:
+            self._display.reset()
         self._display.show_lines(
             self._messages.title,
             self._messages.safe_stop,

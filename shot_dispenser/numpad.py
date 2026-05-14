@@ -23,10 +23,24 @@ class InputDeviceInfo:
     supported_keys: tuple[str, ...]
 
 
+@dataclass
+class _OpenInputDevice:
+    device: object
+    mapper: NumpadKeyMapper
+    grabbed: bool = False
+
+
 class NumpadKeyMapper:
-    def __init__(self, key_bindings: dict[str, Control]) -> None:
+    def __init__(
+        self,
+        key_bindings: dict[str, Control],
+        shutdown_chord: tuple[str, ...] = ("KEY_BACKSPACE", "KEY_KP0"),
+    ) -> None:
         self._key_bindings = dict(key_bindings)
+        self._shutdown_chord = frozenset(shutdown_chord)
         self._pressed_keys: set[str] = set()
+        self._pressed_control_keys: set[str] = set()
+        self._shutdown_chord_active = False
 
     @property
     def expected_key_names(self) -> tuple[str, ...]:
@@ -34,21 +48,38 @@ class NumpadKeyMapper:
 
     def map_key_event(self, key_name: str, value: int) -> OperatorInput | None:
         control = self._key_bindings.get(key_name)
-        if control is None:
+        if control is None and key_name not in self._shutdown_chord:
             return None
         if value == KEY_PRESSED:
             if key_name in self._pressed_keys:
                 return None
             self._pressed_keys.add(key_name)
+            if self._shutdown_chord_pressed() and not self._shutdown_chord_active:
+                self._shutdown_chord_active = True
+                return OperatorInput(Control.SHUTDOWN, pressed=True)
+            if control is None:
+                return None
+            self._pressed_control_keys.add(key_name)
             return OperatorInput(control, pressed=True)
         if value == KEY_RELEASED:
             if key_name not in self._pressed_keys:
                 return None
             self._pressed_keys.remove(key_name)
+            if self._shutdown_chord_active and not self._shutdown_chord_pressed():
+                self._shutdown_chord_active = False
+            if key_name not in self._pressed_control_keys:
+                return None
+            self._pressed_control_keys.remove(key_name)
             return OperatorInput(control, pressed=False)
         if value == KEY_REPEATED:
             return None
         raise ValueError(f"Unexpected key value {value!r} for {key_name}")
+
+    def _shutdown_chord_pressed(self) -> bool:
+        return (
+            bool(self._shutdown_chord)
+            and self._shutdown_chord.issubset(self._pressed_keys)
+        )
 
 
 class EvdevNumpadInput:
@@ -65,49 +96,62 @@ class EvdevNumpadInput:
     def run_forever(self, stop_event: threading.Event | None = None) -> None:
         evdev = _load_evdev()
         stop_event = stop_event or threading.Event()
-        device = self._open_device(evdev)
+        devices = self._open_devices(evdev)
 
-        grabbed = False
         try:
             if self._config.grab_input:
-                device.grab()
-                grabbed = True
+                for entry in devices:
+                    entry.device.grab()
+                    entry.grabbed = True
 
             while not stop_event.is_set():
                 try:
-                    ready, _, _ = select([device.fd], [], [], 0.1)
+                    ready, _, _ = select(
+                        [entry.device.fd for entry in devices],
+                        [],
+                        [],
+                        0.1,
+                    )
                     if not ready:
                         continue
-                    for event in device.read():
-                        if event.type != evdev.ecodes.EV_KEY:
-                            continue
-                        key_name = _key_name(evdev, event.code)
-                        operator_input = self._mapper.map_key_event(
-                            key_name,
-                            event.value,
-                        )
-                        if operator_input is not None:
-                            self._callback(operator_input)
+                    device_by_fd = {entry.device.fd: entry for entry in devices}
+                    for fd in ready:
+                        entry = device_by_fd.get(fd)
+                        if entry is not None:
+                            self._read_ready_device(evdev, entry)
                 except BlockingIOError:
                     continue
                 except OSError as exc:
                     if exc.errno == errno.ENODEV:
                         raise RuntimeError(
-                            "The input device disconnected. Hardware has been stopped; "
+                            "An input device disconnected. Hardware has been stopped; "
                             "reconnect the keyboard and restart the app."
                         ) from exc
                     raise
         finally:
-            if grabbed:
-                try:
-                    device.ungrab()
-                except OSError:
-                    pass
-            device.close()
+            for entry in devices:
+                self._close_device(entry)
 
-    def _open_device(self, evdev):
+    def _read_ready_device(self, evdev, entry: _OpenInputDevice) -> None:
+        for event in entry.device.read():
+            if event.type != evdev.ecodes.EV_KEY:
+                continue
+            key_name = _key_name(evdev, event.code)
+            operator_input = entry.mapper.map_key_event(
+                key_name,
+                event.value,
+            )
+            if operator_input is not None:
+                self._callback(operator_input)
+
+    def _open_devices(self, evdev) -> list[_OpenInputDevice]:
         if self._config.device_path:
-            return evdev.InputDevice(self._config.device_path)
+            return [
+                _OpenInputDevice(
+                    evdev.InputDevice(self._config.device_path),
+                    self._new_mapper(),
+                )
+            ]
 
         candidates = find_candidate_devices(
             self._mapper.expected_key_names,
@@ -118,13 +162,24 @@ class EvdevNumpadInput:
                 "No Bluetooth numpad was found. Pair the numpad and run "
                 "`python3 main.py --list-input-devices` to find its event path."
             )
-        if len(candidates) > 1:
-            paths = ", ".join(device.path for device in candidates)
-            raise RuntimeError(
-                "More than one keyboard-like input device matched. Re-run with "
-                f"`--numpad-device PATH`. Candidates: {paths}"
-            )
-        return evdev.InputDevice(candidates[0].path)
+        return [
+            _OpenInputDevice(evdev.InputDevice(candidate.path), self._new_mapper())
+            for candidate in candidates
+        ]
+
+    def _new_mapper(self) -> NumpadKeyMapper:
+        return NumpadKeyMapper(
+            self._config.key_bindings,
+            self._config.shutdown_chord,
+        )
+
+    def _close_device(self, entry: _OpenInputDevice) -> None:
+        if entry.grabbed:
+            try:
+                entry.device.ungrab()
+            except OSError:
+                pass
+        entry.device.close()
 
 
 def list_input_devices() -> list[InputDeviceInfo]:
