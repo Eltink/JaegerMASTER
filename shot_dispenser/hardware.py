@@ -48,6 +48,12 @@ class DispenserHardware(Protocol):
     def blink_yellow(self, count: int, seconds: float) -> None:
         ...
 
+    def blink_red(self, count: int, seconds: float) -> None:
+        ...
+
+    def blink_green(self, count: int, seconds: float) -> None:
+        ...
+
     def all_off(self) -> None:
         ...
 
@@ -106,6 +112,20 @@ class GpioHardware:
             self.yellow_on()
             time.sleep(seconds)
             self.yellow_off()
+            time.sleep(seconds)
+
+    def blink_red(self, count: int, seconds: float) -> None:
+        for _ in range(count):
+            self.red_on()
+            time.sleep(seconds)
+            self.red_off()
+            time.sleep(seconds)
+
+    def blink_green(self, count: int, seconds: float) -> None:
+        for _ in range(count):
+            self.green_on()
+            time.sleep(seconds)
+            self.green_off()
             time.sleep(seconds)
 
     def all_off(self) -> None:
@@ -172,6 +192,24 @@ class FakeHardware:
             if seconds:
                 time.sleep(seconds)
             self.yellow_off()
+            if seconds:
+                time.sleep(seconds)
+
+    def blink_red(self, count: int, seconds: float) -> None:
+        for _ in range(count):
+            self.red_on()
+            if seconds:
+                time.sleep(seconds)
+            self.red_off()
+            if seconds:
+                time.sleep(seconds)
+
+    def blink_green(self, count: int, seconds: float) -> None:
+        for _ in range(count):
+            self.green_on()
+            if seconds:
+                time.sleep(seconds)
+            self.green_off()
             if seconds:
                 time.sleep(seconds)
 

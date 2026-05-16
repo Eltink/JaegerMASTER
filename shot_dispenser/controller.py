@@ -13,6 +13,8 @@ from .events import EventPublisher, NullEventPublisher
 from .hardware import DispenserHardware
 from .messages import DEFAULT_MESSAGES, OperatorMessages
 
+_CHAMPION_WINDOW_SECONDS = 3600.0  # 1 hour
+
 
 @dataclass
 class RunningAction:
@@ -42,18 +44,37 @@ class ShotDispenserController:
         self._rng = rng or random.Random()
         self._pump_numbers = tuple(range(1, pump_count + 1))
         self._state_lock = threading.RLock()
-        self._active_action: RunningAction | None = None
-        self._random_pool: list[int] = []
+
+        # Multiple pump actions can run concurrently; PvP is exclusive.
+        self._pump_actions: dict[str, RunningAction] = {}
+
+        # PvP state
         self._pvp_active = False
-        self._pvp_ready = False
+        self._pvp_in_setup = False       # True while waiting for both players to ready up
+        self._pvp_ready = False          # True from green light until a player presses
         self._pvp_done = threading.Event()
+        self._pvp_ready_players: set[int] = set()
+        self._pvp_green_time: float = 0.0
+        self._pvp_reaction_times: dict[int, float] = {}
+
+        # Champion tracking (in-memory, resets on restart)
+        self._pvp_champion_ms: float | None = None
+        self._pvp_champion_set_time: float = 0.0
+
+        self._random_pool: list[int] = []
 
     def show_ready(self) -> None:
+        champion_line = self._messages.main_line4
+        if self._pvp_champion_ms is not None:
+            if time.monotonic() - self._pvp_champion_set_time <= _CHAMPION_WINDOW_SECONDS:
+                champion_line = self._messages.pvp_champion.format(
+                    int(self._pvp_champion_ms)
+                )
         self._display.show_lines(
-            self._messages.title,
-            self._messages.ready,
-            "",
-            self._messages.press_button,
+            self._messages.main_line1,
+            self._messages.main_line2,
+            self._messages.main_line3,
+            champion_line,
         )
 
     def handle_input(self, operator_input: OperatorInput) -> None:
@@ -81,6 +102,13 @@ class ShotDispenserController:
                 self.stop_all_pumps()
             return
 
+        if control is Control.LOTTERY:
+            if operator_input.pressed:
+                self.start_lottery()
+            else:
+                self.stop_lottery()
+            return
+
         if operator_input.released:
             return
 
@@ -93,57 +121,67 @@ class ShotDispenserController:
         elif control is Control.STOP_ALL:
             self.safe_stop("operator", reset_display=True)
 
+    # ─── Pump actions ──────────────────────────────────────────────────────
+
     def start_pump(self, pump_number: int) -> bool:
         if pump_number not in self._pump_numbers:
             raise ValueError(f"Unknown pump {pump_number}")
-        return self._start_hold_action(
+        return self._start_pump_action(
             f"pump-{pump_number}",
             lambda stop_event: self._run_single_pump(pump_number, stop_event),
         )
 
     def stop_pump(self, pump_number: int) -> None:
-        self._stop_matching_action(f"pump-{pump_number}")
+        self._stop_pump_action(f"pump-{pump_number}")
 
     def start_random_pump(self) -> bool:
         pump_number = self._next_random_pump()
-        return self._start_hold_action(
+        return self._start_pump_action(
             f"random-pump-{pump_number}",
             lambda stop_event: self._run_single_pump(
-                pump_number,
-                stop_event,
-                random_selection=True,
+                pump_number, stop_event, random_selection=True
             ),
         )
 
     def stop_random_pump(self) -> None:
-        self._stop_action_prefix("random-pump-")
+        with self._state_lock:
+            for name in list(self._pump_actions):
+                if name.startswith("random-pump-"):
+                    self._pump_actions[name].stop_event.set()
 
     def start_all_pumps(self) -> bool:
-        return self._start_hold_action("all-pumps", self._run_all_pumps)
+        return self._start_pump_action("all-pumps", self._run_all_pumps)
 
     def stop_all_pumps(self) -> None:
-        self._stop_matching_action("all-pumps")
+        self._stop_pump_action("all-pumps")
+
+    def start_lottery(self) -> bool:
+        return self._start_pump_action("lottery", self._run_lottery)
+
+    def stop_lottery(self) -> None:
+        self._stop_pump_action("lottery")
+
+    # ─── PvP ───────────────────────────────────────────────────────────────
 
     def start_pvp(self) -> bool:
-        action = RunningAction("pvp", self._pvp_done)
         with self._state_lock:
-            if self._active_action is not None:
+            if self._pump_actions or self._pvp_active:
                 self._show_busy()
                 return False
             self._hardware.traffic_light_off()
             self._pvp_active = True
+            self._pvp_in_setup = True
             self._pvp_ready = False
             self._pvp_done.clear()
-            self._active_action = action
+            self._pvp_ready_players = set()
+            self._pvp_reaction_times = {}
 
-        thread = threading.Thread(
-            target=self._run_pvp_game,
-            args=(action,),
-            name="pvp-game",
-            daemon=True,
+        self._display.show_lines(
+            self._messages.pvp_title,
+            self._messages.pvp_left_button,
+            self._messages.pvp_right_button,
+            self._messages.pvp_press_button,
         )
-        action.thread = thread
-        thread.start()
         return True
 
     def player_pressed(self, player: int) -> bool:
@@ -153,26 +191,72 @@ class ShotDispenserController:
         with self._state_lock:
             if not self._pvp_active:
                 return False
+
+            if self._pvp_in_setup:
+                # ── Setup phase: collect ready confirmations from both players ──
+                self._pvp_ready_players.add(player)
+                both_ready = len(self._pvp_ready_players) == 2
+                if both_ready:
+                    self._pvp_in_setup = False
+                self._show_setup_state(player, both_ready)
+                if both_ready:
+                    self._launch_pvp_countdown()
+                return True
+
+        # ── Game phase (outside lock): first press wins (or false start) ──
+        with self._state_lock:
+            if not self._pvp_active:
+                return False
             too_early = not self._pvp_ready
             self._pvp_active = False
             self._pvp_ready = False
             self._pvp_done.set()
-            action = self._active_action
 
         if too_early:
-            self._handle_false_start(player, action)
+            self._handle_false_start(player)
         else:
-            self._handle_winner(player, action)
+            reaction_ms = (time.monotonic() - self._pvp_green_time) * 1000.0
+            self._pvp_reaction_times[player] = reaction_ms
+            self._update_champion(reaction_ms)
+            self._handle_winner(player)
         return True
+
+    def _show_setup_state(self, just_pressed: int, both_ready: bool) -> None:
+        """Update display during setup phase (called under state lock)."""
+        if both_ready:
+            self._display.show_lines(
+                self._messages.pvp_title,
+                self._center(self._messages.pvp_get_ready),
+                "",
+                "",
+            )
+            return
+        p1 = self._messages.pvp_p1_ready if 1 in self._pvp_ready_players else self._messages.pvp_left_button
+        p2 = self._messages.pvp_p2_ready if 2 in self._pvp_ready_players else self._messages.pvp_right_button
+        wait = self._messages.pvp_waiting_p2 if just_pressed == 1 else self._messages.pvp_waiting_p1
+        self._display.show_lines(self._messages.pvp_title, p1, p2, wait)
+
+    def _launch_pvp_countdown(self) -> None:
+        """Start the countdown thread after both players have confirmed ready."""
+        self._pvp_done.clear()
+        thread = threading.Thread(
+            target=self._run_pvp_game,
+            name="pvp-game",
+            daemon=True,
+        )
+        thread.start()
+
+    # ─── Safe stop / shutdown ──────────────────────────────────────────────
 
     def safe_stop(self, reason: str, reset_display: bool = False) -> None:
         with self._state_lock:
-            action = self._active_action
-            self._active_action = None
+            actions = list(self._pump_actions.values())
+            self._pump_actions.clear()
             self._pvp_active = False
+            self._pvp_in_setup = False
             self._pvp_ready = False
             self._pvp_done.set()
-            if action is not None:
+            for action in actions:
                 action.stop_event.set()
 
         self._hardware.all_off()
@@ -193,34 +277,40 @@ class ShotDispenserController:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             with self._state_lock:
-                action = self._active_action
-            if action is None:
+                threads = [
+                    a.thread for a in self._pump_actions.values() if a.thread is not None
+                ]
+                pvp_running = self._pvp_active
+            if not threads and not pvp_running:
                 return True
-            if action.thread is not None:
+            for t in threads:
                 remaining = max(0.0, deadline - time.monotonic())
-                action.thread.join(min(0.05, remaining))
-            else:
+                t.join(min(0.05, remaining))
+            if pvp_running:
                 time.sleep(0.01)
         with self._state_lock:
-            return self._active_action is None
+            return not self._pump_actions and not self._pvp_active
 
-    def _start_hold_action(
+    # ─── Pump action internals ─────────────────────────────────────────────
+
+    def _start_pump_action(
         self,
         name: str,
         target: Callable[[threading.Event], None],
     ) -> bool:
-        action = RunningAction(name, threading.Event())
-
         with self._state_lock:
-            if self._active_action is not None or self._pvp_active:
+            if self._pvp_active:
                 self._show_busy()
                 return False
+            if name in self._pump_actions:
+                return False  # already running; silently ignore
+            action = RunningAction(name, threading.Event())
+            self._pump_actions[name] = action
             self._hardware.traffic_light_off()
-            self._active_action = action
 
         thread = threading.Thread(
-            target=self._run_hold_action,
-            args=(action, target),
+            target=self._run_pump_action,
+            args=(name, action, target),
             name=name,
             daemon=True,
         )
@@ -228,18 +318,22 @@ class ShotDispenserController:
         thread.start()
         return True
 
-    def _run_hold_action(
+    def _run_pump_action(
         self,
+        name: str,
         action: RunningAction,
         target: Callable[[threading.Event], None],
     ) -> None:
         try:
             target(action.stop_event)
         finally:
-            self._hardware.all_pumps_off()
             with self._state_lock:
-                if self._active_action is action:
-                    self._active_action = None
+                self._pump_actions.pop(name, None)
+                idle = not self._pump_actions and not self._pvp_active
+            if idle:
+                self.show_ready()
+            else:
+                self._update_pump_display()
 
     def _run_single_pump(
         self,
@@ -250,22 +344,10 @@ class ShotDispenserController:
         event_name = "random_pump_started" if random_selection else "pump_started"
         self._publisher.record_event(event_name, {"pump": pump_number})
         self._hardware.pump_on(pump_number)
-        line = (
-            self._messages.random_pump.format(pump_number)
-            if random_selection
-            else self._messages.pump_running.format(pump_number)
-        )
-        self._display.show_lines(
-            self._messages.title,
-            line,
-            self._messages.release_key,
-            "",
-        )
-
-        stop_event.wait()
+        self._update_pump_display()
+        stop_event.wait(timeout=self._timing.pump_max_seconds)
         self._hardware.pump_off(pump_number)
         self._publisher.record_event("pump_stopped", {"pump": pump_number})
-        self.show_ready()
 
     def _run_all_pumps(self, stop_event: threading.Event) -> None:
         self._publisher.record_event("all_pumps_started")
@@ -276,13 +358,84 @@ class ShotDispenserController:
             self._messages.release_key,
             "",
         )
-
-        stop_event.wait()
+        stop_event.wait(timeout=self._timing.pump_max_seconds)
         self._hardware.all_pumps_off()
         self._publisher.record_event("all_pumps_stopped")
-        self.show_ready()
 
-    def _run_pvp_game(self, action: RunningAction) -> None:
+    def _run_lottery(self, stop_event: threading.Event) -> None:
+        r = self._rng.random()
+        if r < 0.10:
+            count = 1
+        elif r < 0.20:
+            count = 2
+        elif r < 0.40:
+            count = 3
+        else:
+            count = 4
+
+        pool = list(self._pump_numbers)
+        self._rng.shuffle(pool)
+        selected = pool[:count]
+
+        self._publisher.record_event("lottery_started", {"pumps": selected, "count": count})
+        for p in selected:
+            self._hardware.pump_on(p)
+        self._display.show_lines(
+            self._messages.title,
+            self._messages.lottery_msg.format(count),
+            self._messages.release_key,
+            "",
+        )
+        stop_event.wait(timeout=self._timing.pump_max_seconds)
+        for p in selected:
+            self._hardware.pump_off(p)
+        self._publisher.record_event("lottery_stopped", {"pumps": selected})
+
+    def _update_pump_display(self) -> None:
+        with self._state_lock:
+            names = list(self._pump_actions.keys())
+
+        if not names:
+            return
+
+        # Build a list of pump numbers from active actions
+        pump_nums: list[int] = []
+        for name in names:
+            if name.startswith("pump-"):
+                try:
+                    pump_nums.append(int(name.split("-")[1]))
+                except (IndexError, ValueError):
+                    pass
+            elif name.startswith("random-pump-"):
+                try:
+                    pump_nums.append(int(name.split("-")[2]))
+                except (IndexError, ValueError):
+                    pass
+        pump_nums.sort()
+
+        if len(names) == 1 and not pump_nums:
+            # lottery or all-pumps already set their own display
+            return
+
+        if len(pump_nums) == 1:
+            line = self._messages.pump_running.format(pump_nums[0])
+            line2 = self._messages.release_key
+        else:
+            nums_str = ",".join(str(n) for n in pump_nums)
+            line = self._messages.pump_multi.format(nums_str)
+            line2 = self._messages.release_key
+
+        self._display.show_lines(self._messages.title, line, line2, "")
+
+    def _stop_pump_action(self, name: str) -> None:
+        with self._state_lock:
+            action = self._pump_actions.get(name)
+            if action is not None:
+                action.stop_event.set()
+
+    # ─── PvP internals ────────────────────────────────────────────────────
+
+    def _run_pvp_game(self) -> None:
         timed_out = False
         try:
             self._publisher.record_event("pvp_started")
@@ -332,6 +485,7 @@ class ShotDispenserController:
                 if not self._pvp_active:
                     return
                 self._pvp_ready = True
+                self._pvp_green_time = time.monotonic()
             self._display.show_lines(
                 self._messages.pvp_title,
                 "",
@@ -358,14 +512,11 @@ class ShotDispenserController:
                 self._pause(self._timing.pvp_result_seconds)
                 self.show_ready()
         finally:
-            if timed_out or action.stop_event.is_set():
-                self._clear_active(action)
+            if timed_out:
+                with self._state_lock:
+                    self._pvp_active = False
 
-    def _handle_false_start(
-        self,
-        player: int,
-        action: RunningAction | None,
-    ) -> None:
+    def _handle_false_start(self, player: int) -> None:
         self._hardware.traffic_light_off()
         self._display.show_lines(
             self._messages.pvp_title,
@@ -375,27 +526,62 @@ class ShotDispenserController:
         )
         self._publisher.record_event("pvp_false_start", {"player": player})
         self._hardware.blink_yellow(count=5, seconds=0.1)
+        # Clear pvp state before show_ready to avoid "Aguarde..." race
+        with self._state_lock:
+            self._pvp_active = False
         self._pause(self._timing.message_pause_seconds)
         self.show_ready()
-        self._clear_active(action)
 
-    def _handle_winner(self, player: int, action: RunningAction | None) -> None:
-        self._hardware.green_off()
+    def _handle_winner(self, player: int) -> None:
+        self._hardware.traffic_light_off()
+
+        reaction_ms = self._pvp_reaction_times.get(player, 0.0)
+        other_player = 3 - player  # 1→2, 2→1
+        other_ms = self._pvp_reaction_times.get(other_player, 0.0)
+
+        # Left player (1) = green LED; right player (2) = red LED
         if player == 1:
-            self._hardware.red_on()
-            winner = self._messages.pvp_left_wins
+            winner_msg = self._messages.pvp_left_wins
         else:
-            self._hardware.green_on()
-            winner = self._messages.pvp_right_wins
+            winner_msg = self._messages.pvp_right_wins
+
+        e_ms = reaction_ms if player == 1 else other_ms
+        d_ms = reaction_ms if player == 2 else other_ms
+        time_line = f"Esq:{int(e_ms)}ms Dir:{int(d_ms)}ms"
 
         self._display.show_lines(
             self._messages.pvp_title,
-            self._center(winner),
-            self._center(self._messages.pvp_wins),
+            time_line[: self._display.columns],
+            self._center(winner_msg + " " + self._messages.pvp_wins),
             self._messages.pvp_restart,
         )
-        self._publisher.record_event("pvp_winner", {"player": player})
-        self._clear_active(action)
+        self._publisher.record_event("pvp_winner", {"player": player, "ms": reaction_ms})
+
+        # Blink the winner's LED (left=green, right=red)
+        if player == 1:
+            self._hardware.blink_green(
+                count=self._timing.pvp_blink_count,
+                seconds=self._timing.pvp_blink_seconds,
+            )
+        else:
+            self._hardware.blink_red(
+                count=self._timing.pvp_blink_count,
+                seconds=self._timing.pvp_blink_seconds,
+            )
+
+    def _update_champion(self, reaction_ms: float) -> None:
+        now = time.monotonic()
+        if (
+            self._pvp_champion_ms is not None
+            and now - self._pvp_champion_set_time > _CHAMPION_WINDOW_SECONDS
+        ):
+            self._pvp_champion_ms = None
+
+        if self._pvp_champion_ms is None or reaction_ms < self._pvp_champion_ms:
+            self._pvp_champion_ms = reaction_ms
+            self._pvp_champion_set_time = now
+
+    # ─── Shared helpers ───────────────────────────────────────────────────
 
     def _next_random_pump(self) -> int:
         with self._state_lock:
@@ -403,25 +589,6 @@ class ShotDispenserController:
                 self._random_pool = list(self._pump_numbers)
                 self._rng.shuffle(self._random_pool)
             return self._random_pool.pop()
-
-    def _stop_matching_action(self, name: str) -> None:
-        with self._state_lock:
-            action = self._active_action
-            if action is not None and action.name == name:
-                action.stop_event.set()
-
-    def _stop_action_prefix(self, prefix: str) -> None:
-        with self._state_lock:
-            action = self._active_action
-            if action is not None and action.name.startswith(prefix):
-                action.stop_event.set()
-
-    def _clear_active(self, action: RunningAction | None) -> None:
-        if action is None:
-            return
-        with self._state_lock:
-            if self._active_action is action:
-                self._active_action = None
 
     def _show_busy(self) -> None:
         self._display.show_lines(self._messages.title, self._messages.busy, "", "")

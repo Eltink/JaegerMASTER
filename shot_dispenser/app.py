@@ -5,6 +5,7 @@ import atexit
 import signal
 import subprocess
 import threading
+import time
 from collections.abc import Callable
 
 from .commands import Control, OperatorInput
@@ -64,6 +65,14 @@ def build_parser() -> argparse.ArgumentParser:
             "for example: --shutdown-command sudo -n /usr/sbin/poweroff"
         ),
     )
+    parser.add_argument(
+        "--restart-command",
+        nargs=argparse.REMAINDER,
+        help=(
+            "Command to run after the operator restart chord. Put this last, "
+            "for example: --restart-command sudo -n /usr/sbin/reboot"
+        ),
+    )
     pump_polarity = parser.add_mutually_exclusive_group()
     pump_polarity.add_argument(
         "--pump-active-high",
@@ -118,49 +127,102 @@ def main(argv: list[str] | None = None) -> int:
     stop_event = threading.Event()
     shutdown_once = _make_shutdown_once(controller, stop_event)
     _install_signal_handlers(shutdown_once)
-
     atexit.register(shutdown_once, "process exit")
-    controller.show_ready()
+
     handle_input = _make_input_handler(
         controller,
+        display,
         shutdown_once,
         args.shutdown_command,
+        args.restart_command,
     )
 
     try:
         if args.terminal_control:
+            _run_boot_screen(display, config.timing.boot_seconds)
+            controller.show_ready()
             TerminalInputRunner(handle_input).run_forever()
         else:
             mapper = NumpadKeyMapper(
                 config.numpad.key_bindings,
                 config.numpad.shutdown_chord,
+                config.numpad.restart_chord,
             )
             numpad = EvdevNumpadInput(config.numpad, mapper, handle_input)
-            numpad.run_forever(stop_event)
+
+            # Start numpad in a thread so keys work during boot screen.
+            input_thread = threading.Thread(
+                target=numpad.run_forever,
+                args=(stop_event,),
+                name="numpad-input",
+                daemon=True,
+            )
+            input_thread.start()
+            _run_boot_screen(display, config.timing.boot_seconds)
+            controller.show_ready()
+            input_thread.join()
+
     except KeyboardInterrupt:
         shutdown_once("keyboard interrupt")
         return 0
     except RuntimeError as exc:
         shutdown_once("input error")
-        display.show_lines(DEFAULT_MESSAGES.title, DEFAULT_MESSAGES.input_error, str(exc)[: display.columns])
+        display.show_lines(
+            DEFAULT_MESSAGES.title,
+            DEFAULT_MESSAGES.input_error,
+            str(exc)[: display.columns],
+        )
         raise
     return 0
 
 
+def _run_boot_screen(display, duration: float) -> None:
+    msgs = DEFAULT_MESSAGES
+    credits = msgs.boot_credits
+    cols = display.columns
+    padded = credits + " " * cols
+    start = time.monotonic()
+    pos = 0
+    while time.monotonic() - start < duration:
+        window = (padded * 2)[pos: pos + cols]
+        display.show_lines(msgs.main_line1, msgs.main_line2, msgs.main_line3, window)
+        pos = (pos + 1) % len(padded)
+        time.sleep(0.15)
+
+
 def _make_input_handler(
     controller: ShotDispenserController,
+    display,
     shutdown_once: Callable[[str], None],
     shutdown_command: list[str] | None = None,
+    restart_command: list[str] | None = None,
 ) -> Callable[[OperatorInput], None]:
     def handle_input(operator_input: OperatorInput) -> None:
         if operator_input.control is Control.SHUTDOWN:
             if operator_input.pressed:
-                shutdown_once("operator shutdown")
-                _run_shutdown_command(shutdown_command)
+                _do_operator_shutdown(controller, display, shutdown_once, shutdown_command)
+            return
+        if operator_input.control is Control.RESTART:
+            if operator_input.pressed:
+                _do_operator_shutdown(controller, display, shutdown_once, restart_command)
             return
         controller.handle_input(operator_input)
 
     return handle_input
+
+
+def _do_operator_shutdown(
+    controller: ShotDispenserController,
+    display,
+    shutdown_once: Callable[[str], None],
+    command: list[str] | None,
+) -> None:
+    controller.safe_stop("operator")
+    display.show_lines(DEFAULT_MESSAGES.shutdown_message, "", "", "")
+    time.sleep(1.5)
+    display.backlight_off()
+    shutdown_once("operator shutdown")
+    _run_shutdown_command(command)
 
 
 def _run_shutdown_command(command: list[str] | None) -> None:

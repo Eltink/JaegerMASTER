@@ -35,12 +35,15 @@ class NumpadKeyMapper:
         self,
         key_bindings: dict[str, Control],
         shutdown_chord: tuple[str, ...] = ("KEY_BACKSPACE", "KEY_KP0"),
+        restart_chord: tuple[str, ...] = ("KEY_KP0", "KEY_BACKSPACE", "KEY_KPENTER"),
     ) -> None:
         self._key_bindings = dict(key_bindings)
         self._shutdown_chord = frozenset(shutdown_chord)
+        self._restart_chord = frozenset(restart_chord)
         self._pressed_keys: set[str] = set()
         self._pressed_control_keys: set[str] = set()
         self._shutdown_chord_active = False
+        self._restart_chord_active = False
 
     @property
     def expected_key_names(self) -> tuple[str, ...]:
@@ -48,38 +51,59 @@ class NumpadKeyMapper:
 
     def map_key_event(self, key_name: str, value: int) -> OperatorInput | None:
         control = self._key_bindings.get(key_name)
-        if control is None and key_name not in self._shutdown_chord:
+        in_shutdown_chord = key_name in self._shutdown_chord
+        in_restart_chord = key_name in self._restart_chord
+
+        if control is None and not in_shutdown_chord and not in_restart_chord:
             return None
+
         if value == KEY_PRESSED:
             if key_name in self._pressed_keys:
                 return None
             self._pressed_keys.add(key_name)
-            if self._shutdown_chord_pressed() and not self._shutdown_chord_active:
+
+            # Restart chord (3-key) takes priority over shutdown chord (2-key).
+            # Fires when all restart keys are held, suppressing any pending shutdown.
+            if self._restart_chord and self._restart_chord.issubset(self._pressed_keys):
+                if not self._restart_chord_active:
+                    self._restart_chord_active = True
+                    self._shutdown_chord_active = True  # prevent double-fire
+                    return OperatorInput(Control.RESTART, pressed=True)
+                return None
+
+            # Shutdown chord fires only when KPENTER (restart-exclusive key) is not held,
+            # ensuring restart keys don't accidentally trigger shutdown mid-press.
+            restart_exclusive = self._restart_chord - self._shutdown_chord
+            if (
+                self._shutdown_chord
+                and self._shutdown_chord.issubset(self._pressed_keys)
+                and not self._shutdown_chord_active
+                and not restart_exclusive.intersection(self._pressed_keys)
+            ):
                 self._shutdown_chord_active = True
                 return OperatorInput(Control.SHUTDOWN, pressed=True)
+
             if control is None:
                 return None
             self._pressed_control_keys.add(key_name)
             return OperatorInput(control, pressed=True)
+
         if value == KEY_RELEASED:
             if key_name not in self._pressed_keys:
                 return None
             self._pressed_keys.remove(key_name)
-            if self._shutdown_chord_active and not self._shutdown_chord_pressed():
+            if self._shutdown_chord_active and not self._shutdown_chord.issubset(self._pressed_keys):
                 self._shutdown_chord_active = False
+            if self._restart_chord_active and not self._restart_chord.issubset(self._pressed_keys):
+                self._restart_chord_active = False
             if key_name not in self._pressed_control_keys:
                 return None
             self._pressed_control_keys.remove(key_name)
             return OperatorInput(control, pressed=False)
+
         if value == KEY_REPEATED:
             return None
         raise ValueError(f"Unexpected key value {value!r} for {key_name}")
-
-    def _shutdown_chord_pressed(self) -> bool:
-        return (
-            bool(self._shutdown_chord)
-            and self._shutdown_chord.issubset(self._pressed_keys)
-        )
 
 
 class EvdevNumpadInput:
@@ -171,6 +195,7 @@ class EvdevNumpadInput:
         return NumpadKeyMapper(
             self._config.key_bindings,
             self._config.shutdown_chord,
+            self._config.restart_chord,
         )
 
     def _close_device(self, entry: _OpenInputDevice) -> None:

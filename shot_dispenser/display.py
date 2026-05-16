@@ -26,6 +26,9 @@ class Display(Protocol):
     def reset(self) -> None:
         ...
 
+    def backlight_off(self) -> None:
+        ...
+
 
 class LcdDisplay:
     def __init__(
@@ -88,6 +91,16 @@ class LcdDisplay:
             old_lcd = self._lcd
             self._lcd = self._try_open_lcd()
             self._close_lcd(old_lcd)
+
+    def backlight_off(self) -> None:
+        with self._lock:
+            lcd = self._get_lcd()
+            if lcd is None:
+                return
+            try:
+                lcd.backlight_enabled = False
+            except (OSError, AttributeError):
+                pass
 
     def _get_lcd(self):
         if self._lcd is None:
@@ -155,3 +168,8 @@ class ConsoleDisplay:
         with self._lock:
             self.history.append(("<reset>",))
         print("LCD: <reset>")
+
+    def backlight_off(self) -> None:
+        with self._lock:
+            self.history.append(("<backlight off>",))
+        print("LCD: <backlight off>")

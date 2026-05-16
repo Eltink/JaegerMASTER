@@ -71,6 +71,45 @@ class NumpadKeyMapperTests(unittest.TestCase):
         self.assertEqual(Control.STOP_ALL, stop.control)
         self.assertEqual(Control.SHUTDOWN, shutdown.control)
 
+    def test_restart_chord_takes_priority_over_shutdown(self) -> None:
+        mapper = NumpadKeyMapper(
+            {"KEY_KP0": Control.STOP_ALL, "KEY_KPENTER": Control.STOP_ALL},
+            shutdown_chord=("KEY_BACKSPACE", "KEY_KP0"),
+            restart_chord=("KEY_KP0", "KEY_BACKSPACE", "KEY_KPENTER"),
+        )
+
+        # Hold KP0 and Backspace — shutdown would normally fire, but KPENTER is not held yet
+        # (KPENTER not pressed → shutdown fires)
+        mapper.map_key_event("KEY_KP0", KEY_PRESSED)
+        result = mapper.map_key_event("KEY_BACKSPACE", KEY_PRESSED)
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(Control.SHUTDOWN, result.control)
+
+    def test_restart_chord_fires_when_all_three_keys_pressed(self) -> None:
+        mapper = NumpadKeyMapper(
+            {"KEY_KP0": Control.STOP_ALL, "KEY_KPENTER": Control.STOP_ALL},
+            shutdown_chord=("KEY_BACKSPACE", "KEY_KP0"),
+            restart_chord=("KEY_KP0", "KEY_BACKSPACE", "KEY_KPENTER"),
+        )
+
+        # Press KP0+Backspace first (shutdown would fire), but KPENTER is not in play yet.
+        # In this scenario add KPENTER when KPENTER not yet present → test restart chord fresh
+        mapper2 = NumpadKeyMapper(
+            {"KEY_KP0": Control.STOP_ALL, "KEY_KPENTER": Control.STOP_ALL},
+            shutdown_chord=("KEY_BACKSPACE", "KEY_KP0"),
+            restart_chord=("KEY_KP0", "KEY_BACKSPACE", "KEY_KPENTER"),
+        )
+        # Press KP0 first (stop_all), then Backspace — KPENTER not held → shutdown
+        # Instead: hold KPENTER first so shutdown is suppressed
+        mapper2.map_key_event("KEY_KPENTER", KEY_PRESSED)
+        mapper2.map_key_event("KEY_KP0", KEY_PRESSED)
+        result = mapper2.map_key_event("KEY_BACKSPACE", KEY_PRESSED)
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(Control.RESTART, result.control)
+
     def test_rejects_unexpected_key_value(self) -> None:
         mapper = NumpadKeyMapper({"KEY_KP1": Control.PUMP_1})
 

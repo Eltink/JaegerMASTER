@@ -35,6 +35,11 @@ class TimingConfig:
     pvp_yellow_max_seconds: float = 4.0
     pvp_timeout_seconds: float = 10.0
     pvp_result_seconds: float = 2.0
+    pvp_blink_count: int = 5
+    pvp_blink_seconds: float = 0.3
+    pump_max_seconds: float = 5.0
+    boot_seconds: float = 5.0
+    boot_scroll_seconds: float = 0.15
     wait_tick_seconds: float = 0.05
 
 
@@ -45,8 +50,9 @@ DEFAULT_KEY_BINDINGS: dict[str, Control] = {
     "KEY_KP4": Control.PUMP_4,
     "KEY_KP5": Control.RANDOM_PUMP,
     "KEY_KP6": Control.ALL_PUMPS,
-    "KEY_KP7": Control.PVP_START,
-    "KEY_KP8": Control.PLAYER_LEFT,
+    "KEY_KPPLUS": Control.LOTTERY,
+    "KEY_KP7": Control.PLAYER_LEFT,
+    "KEY_KP8": Control.PVP_START,
     "KEY_KP9": Control.PLAYER_RIGHT,
     "KEY_KP0": Control.STOP_ALL,
     "KEY_KPENTER": Control.STOP_ALL,
@@ -59,6 +65,7 @@ class NumpadConfig:
     device_name_contains: str | None = None
     grab_input: bool = True
     shutdown_chord: tuple[str, str] = ("KEY_BACKSPACE", "KEY_KP0")
+    restart_chord: tuple[str, ...] = ("KEY_KP0", "KEY_BACKSPACE", "KEY_KPENTER")
     key_bindings: dict[str, Control] = field(
         default_factory=lambda: dict(DEFAULT_KEY_BINDINGS)
     )
