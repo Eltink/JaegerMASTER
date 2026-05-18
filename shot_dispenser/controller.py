@@ -627,10 +627,10 @@ class ShotDispenserController:
             else self._messages.pvp_right_wins
         )
         self._display.show_lines(
-            self._center(winner_text + " " + self._messages.pvp_wins),
-            self._reaction_line(left_ms, right_ms),
+            self._center(f"{winner_text} {self._messages.pvp_wins}"),
+            self._center(self._reaction_line(left_ms, right_ms)),
             self._center(self._champion_line()),
-            self._messages.pvp_restart,
+            self._center(self._messages.pvp_restart),
         )
         self._publisher.record_event(
             "pvp_winner",
@@ -657,7 +657,7 @@ class ShotDispenserController:
             self._messages.pvp_title,
             self._center(self._messages.pvp_player.format(player)),
             self._center(self._messages.pvp_too_early),
-            self._messages.pvp_restart,
+            self._center(self._messages.pvp_restart),
         )
         self._publisher.record_event("pvp_false_start", {"player": player})
         self._hardware.blink_yellow(count=5, seconds=0.1)

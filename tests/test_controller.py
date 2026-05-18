@@ -256,6 +256,38 @@ class ControllerTests(unittest.TestCase):
         self.assertTrue(self.hardware.red)
         self.assertFalse(self.hardware.green)
 
+    def test_no_displayed_line_exceeds_screen(self) -> None:
+        # Drive a full winning game (test phase, countdown, both react,
+        # result with reaction times + champion line) and assert every
+        # line ever shown fits the 20x4 screen.
+        self._pass_pvp_test_phase()
+        self.assertTrue(wait_for(lambda: self.controller._pvp is not None
+                                 and self.controller._pvp.green_at is not None))
+        self.assertTrue(self.controller.player_pressed(2))
+        self.assertTrue(self.controller.player_pressed(1))
+        self.assertTrue(self.controller.join_idle(timeout=2.0))
+
+        # Also exercise the raffle and random pump screens.
+        self.controller.start_pvp()  # leave PvP so pumps are enabled
+        self.assertTrue(self.controller.start_raffle())
+        self.assertTrue(wait_for(lambda: any(self.hardware.pumps)))
+        self.controller.stop_raffle()
+        self.assertTrue(self.controller.join_idle())
+
+        champion_lines = [
+            line
+            for row in self.display.history
+            for line in row
+            if "Campeao 1h:" in line
+        ]
+        self.assertTrue(champion_lines, "champion line should appear post-game")
+        for row in self.display.history:
+            for line in row:
+                self.assertLessEqual(
+                    len(line), 20, f"line exceeds 20 cols: {line!r}"
+                )
+            self.assertLessEqual(len(row), 4, f"too many rows: {row!r}")
+
     def test_pvp_left_player_wins_blinks_green(self) -> None:
         self._pass_pvp_test_phase()
         self.assertTrue(wait_for(lambda: self.controller._pvp is not None
