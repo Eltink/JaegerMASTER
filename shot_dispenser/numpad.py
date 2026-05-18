@@ -35,12 +35,22 @@ class NumpadKeyMapper:
         self,
         key_bindings: dict[str, Control],
         shutdown_chord: tuple[str, ...] = ("KEY_BACKSPACE", "KEY_KP0"),
+        restart_chord: tuple[str, ...] = ("KEY_BACKSPACE", "KEY_KPENTER"),
     ) -> None:
         self._key_bindings = dict(key_bindings)
-        self._shutdown_chord = frozenset(shutdown_chord)
+        self._chords: list[tuple[frozenset[str], Control]] = []
+        if shutdown_chord:
+            self._chords.append((frozenset(shutdown_chord), Control.SHUTDOWN))
+        if restart_chord:
+            self._chords.append((frozenset(restart_chord), Control.RESTART))
+        # Longest chords first so a more specific combo wins over a subset.
+        self._chords.sort(key=lambda item: len(item[0]), reverse=True)
+        self._chord_keys = {
+            key for chord, _ in self._chords for key in chord
+        }
         self._pressed_keys: set[str] = set()
         self._pressed_control_keys: set[str] = set()
-        self._shutdown_chord_active = False
+        self._active_chord: frozenset[str] | None = None
 
     @property
     def expected_key_names(self) -> tuple[str, ...]:
@@ -48,15 +58,17 @@ class NumpadKeyMapper:
 
     def map_key_event(self, key_name: str, value: int) -> OperatorInput | None:
         control = self._key_bindings.get(key_name)
-        if control is None and key_name not in self._shutdown_chord:
+        if control is None and key_name not in self._chord_keys:
             return None
         if value == KEY_PRESSED:
             if key_name in self._pressed_keys:
                 return None
             self._pressed_keys.add(key_name)
-            if self._shutdown_chord_pressed() and not self._shutdown_chord_active:
-                self._shutdown_chord_active = True
-                return OperatorInput(Control.SHUTDOWN, pressed=True)
+            if self._active_chord is None:
+                for chord, chord_control in self._chords:
+                    if chord.issubset(self._pressed_keys):
+                        self._active_chord = chord
+                        return OperatorInput(chord_control, pressed=True)
             if control is None:
                 return None
             self._pressed_control_keys.add(key_name)
@@ -65,8 +77,11 @@ class NumpadKeyMapper:
             if key_name not in self._pressed_keys:
                 return None
             self._pressed_keys.remove(key_name)
-            if self._shutdown_chord_active and not self._shutdown_chord_pressed():
-                self._shutdown_chord_active = False
+            if (
+                self._active_chord is not None
+                and not self._active_chord.issubset(self._pressed_keys)
+            ):
+                self._active_chord = None
             if key_name not in self._pressed_control_keys:
                 return None
             self._pressed_control_keys.remove(key_name)
@@ -74,12 +89,6 @@ class NumpadKeyMapper:
         if value == KEY_REPEATED:
             return None
         raise ValueError(f"Unexpected key value {value!r} for {key_name}")
-
-    def _shutdown_chord_pressed(self) -> bool:
-        return (
-            bool(self._shutdown_chord)
-            and self._shutdown_chord.issubset(self._pressed_keys)
-        )
 
 
 class EvdevNumpadInput:
@@ -171,6 +180,7 @@ class EvdevNumpadInput:
         return NumpadKeyMapper(
             self._config.key_bindings,
             self._config.shutdown_chord,
+            self._config.restart_chord,
         )
 
     def _close_device(self, entry: _OpenInputDevice) -> None:

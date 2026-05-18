@@ -53,17 +53,19 @@ Pump actions start on key down and stop on key release. Repeated key events whil
 
 | Key | Function |
 |---|---|
-| KP1 | Pump 1 while held |
-| KP2 | Pump 2 while held |
-| KP3 | Pump 3 while held |
-| KP4 | Pump 4 while held |
+| KP1 | Pump 1 while held (5s safety cut) |
+| KP2 | Pump 2 while held (5s safety cut) |
+| KP3 | Pump 3 while held (5s safety cut) |
+| KP4 | Pump 4 while held (5s safety cut); KP1-KP4 can run together |
 | KP5 | Random pump while held; all four pumps are selected once before repeats |
 | KP6 | All pumps while held |
-| KP7 | Start or restart PvP mode |
-| KP8 | PvP left player |
-| KP9 | PvP right player |
-| KP0 or KP Enter | Safe stop and LCD reinitialize |
+| KP+ | Raffle: 60% all, 20% 3 pumps, 10% 2 pumps, 10% 1 pump, while held |
+| KP8 | Start PvP mode or play another round |
+| KP7 | PvP left player (green LED) |
+| KP9 | PvP right player (red LED) |
+| KP0 or KP Enter | Block Bombas (safe stop) and LCD reinitialize |
 | Backspace + KP0 | Safe stop, then run the configured shutdown command |
+| Backspace + KP Enter | Safe stop, then run the configured restart command |
 
 ## Software setup on the Raspberry Pi
 
@@ -228,7 +230,7 @@ python3 -m unittest discover -s tests
 Run one test:
 
 ```bash
-python3 -m unittest tests.test_controller.ControllerTests.test_pvp_right_player_wins_after_green
+python3 -m unittest tests.test_controller.ControllerTests.test_pvp_right_player_wins_blinks_red
 ```
 
 Dry-run mode uses fake hardware and console LCD output, but still reads real numpad events:
@@ -251,8 +253,9 @@ Terminal control commands:
 | `1 down` / `1 up` | Start/stop Pump 1 manually |
 | `hold random 2` | Run a random pump for 2 seconds |
 | `all down` / `all up` | Start/stop all pumps |
-| `pvp` | Start PvP |
-| `left` / `right` | Left/right PvP player |
+| `raffle down` / `raffle up` | Start/stop the raffle selection |
+| `pvp` | Start PvP or play another round |
+| `left` / `right` | Left (green) / right (red) PvP player |
 | `stop` | Safe stop |
 | `quit` | Exit terminal control |
 
@@ -285,25 +288,28 @@ The older scripts remain for reference and hardware bring-up:
 
 ### Pump mode
 
-KP1-KP4 run a single pump while held. KP5 chooses a pump from a shuffled pool and runs it while held; all four pumps are used once before any pump repeats. KP6 runs all four pumps while held.
+KP1-KP4 run a single pump while held and can run together (press several at once). KP5 chooses a pump from a shuffled pool and runs it while held; all four pumps are used once before any pump repeats. KP6 runs all four pumps while held. KP+ runs a random raffle selection while held. No pump ever runs longer than 5 seconds: a held key is force-stopped at the safety limit.
 
-Only one hardware-driving action can run at a time. If a pump, random pump, all-pumps action, or PvP game is active, new actions are rejected and the LCD shows a busy message.
+The individual pumps (KP1-KP4) can overlap. The random, all-pumps, raffle, and PvP actions are exclusive: starting one while a pump or another exclusive action is active is rejected and the LCD shows a busy message.
 
 ### PvP reaction game
 
-Press KP7 to start.
+Press KP8 to start a game or play another round.
 
-1. Red turns on for 1 second.
-2. Yellow turns on for a random 0.1-4 second delay.
-3. Green turns on and players may press.
-4. A player press before green is a false start.
-5. The first valid player press wins.
-6. Timeout is 10 seconds if nobody presses.
-7. The winner light stays on until the next operator action or PvP restart.
+1. Test phase: each player presses their button (KP7 left/green, KP9 right/red) so they can confirm it works. The pressed player's LED lights up.
+2. When both players have tested, the countdown starts automatically.
+3. Red turns on for 1 second.
+4. Yellow turns on for a random 0.1-4 second delay.
+5. Green turns on and players may press.
+6. A player press before green is a false start.
+7. The first valid player press wins; both reaction times are shown in milliseconds.
+8. The winner's LED blinks (green for left, red for right).
+9. The lowest reaction time of the last hour is shown as "Campeao 1h: x ms".
+10. Timeout is 10 seconds if nobody presses.
 
 ## Autostart on boot
 
-The current Pi deployment uses `/etc/systemd/system/shotdispenser.service`. The service uses `--pump-active-low` for the active-low relay HAT. The Backspace + KP0 shutdown chord runs the configured Linux poweroff command after stopping the pumps.
+The current Pi deployment uses `/etc/systemd/system/shotdispenser.service`. The service uses `--pump-active-low` for the active-low relay HAT. The Backspace + KP0 shutdown chord runs the configured Linux poweroff command after stopping the pumps and shows "Desligando" before turning the LCD backlight off. The Backspace + KP Enter restart chord runs the configured restart command (pass it with `--restart-command "sudo -n /usr/sbin/reboot"`).
 
 ```ini
 [Unit]

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import atexit
+import shlex
 import signal
 import subprocess
 import threading
@@ -55,6 +56,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--terminal-control",
         action="store_true",
         help="Read explicit test commands from the terminal instead of an input device.",
+    )
+    parser.add_argument(
+        "--restart-command",
+        default=None,
+        help=(
+            "Command to run after the operator restart chord "
+            "(Backspace + KP Enter), for example: "
+            '--restart-command "sudo -n /usr/sbin/reboot"'
+        ),
     )
     parser.add_argument(
         "--shutdown-command",
@@ -116,15 +126,28 @@ def main(argv: list[str] | None = None) -> int:
         pump_count=config.gpio.pump_count,
     )
     stop_event = threading.Event()
-    shutdown_once = _make_shutdown_once(controller, stop_event)
+    shutdown_once, restart_once = _make_power_handlers(controller, stop_event)
     _install_signal_handlers(shutdown_once)
 
     atexit.register(shutdown_once, "process exit")
-    controller.show_ready()
+
+    boot_thread = threading.Thread(
+        target=controller.play_boot_sequence,
+        args=(stop_event,),
+        name="boot-sequence",
+        daemon=True,
+    )
+    boot_thread.start()
+
+    restart_command = (
+        shlex.split(args.restart_command) if args.restart_command else None
+    )
     handle_input = _make_input_handler(
         controller,
         shutdown_once,
         args.shutdown_command,
+        restart_once,
+        restart_command,
     )
 
     try:
@@ -134,6 +157,7 @@ def main(argv: list[str] | None = None) -> int:
             mapper = NumpadKeyMapper(
                 config.numpad.key_bindings,
                 config.numpad.shutdown_chord,
+                config.numpad.restart_chord,
             )
             numpad = EvdevNumpadInput(config.numpad, mapper, handle_input)
             numpad.run_forever(stop_event)
@@ -151,19 +175,26 @@ def _make_input_handler(
     controller: ShotDispenserController,
     shutdown_once: Callable[[str], None],
     shutdown_command: list[str] | None = None,
+    restart_once: Callable[[str], None] | None = None,
+    restart_command: list[str] | None = None,
 ) -> Callable[[OperatorInput], None]:
     def handle_input(operator_input: OperatorInput) -> None:
         if operator_input.control is Control.SHUTDOWN:
             if operator_input.pressed:
                 shutdown_once("operator shutdown")
-                _run_shutdown_command(shutdown_command)
+                _run_power_command(shutdown_command)
+            return
+        if operator_input.control is Control.RESTART:
+            if operator_input.pressed and restart_once is not None:
+                restart_once("operator restart")
+                _run_power_command(restart_command)
             return
         controller.handle_input(operator_input)
 
     return handle_input
 
 
-def _run_shutdown_command(command: list[str] | None) -> None:
+def _run_power_command(command: list[str] | None) -> None:
     if not command:
         return
     subprocess.Popen(command)
@@ -183,23 +214,31 @@ def _print_input_devices() -> int:
     return 0
 
 
-def _make_shutdown_once(
+def _make_power_handlers(
     controller: ShotDispenserController,
     stop_event: threading.Event,
-) -> Callable[[str], None]:
+) -> tuple[Callable[[str], None], Callable[[str], None]]:
     lock = threading.Lock()
     completed = False
 
-    def shutdown(reason: str) -> None:
+    def _claim() -> bool:
         nonlocal completed
         with lock:
             if completed:
-                return
+                return False
             completed = True
             stop_event.set()
-        controller.shutdown(reason)
+            return True
 
-    return shutdown
+    def shutdown(reason: str) -> None:
+        if _claim():
+            controller.shutdown(reason)
+
+    def restart(reason: str) -> None:
+        if _claim():
+            controller.restart(reason)
+
+    return shutdown, restart
 
 
 def _install_signal_handlers(shutdown_once: Callable[[str], None]) -> None:

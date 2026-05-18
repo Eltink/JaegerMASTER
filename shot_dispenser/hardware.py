@@ -48,6 +48,9 @@ class DispenserHardware(Protocol):
     def blink_yellow(self, count: int, seconds: float) -> None:
         ...
 
+    def blink_led(self, color: str, count: int, seconds: float) -> None:
+        ...
+
     def all_off(self) -> None:
         ...
 
@@ -63,6 +66,11 @@ class GpioHardware:
         self._red = LED(pins.led_red_pin)
         self._yellow = LED(pins.led_yellow_pin)
         self._green = LED(pins.led_green_pin)
+        self._leds = {
+            "red": self._red,
+            "yellow": self._yellow,
+            "green": self._green,
+        }
 
     def pump_on(self, pump_number: int) -> None:
         self._pumps[_index(pump_number)].on()
@@ -102,10 +110,14 @@ class GpioHardware:
         self.green_off()
 
     def blink_yellow(self, count: int, seconds: float) -> None:
+        self.blink_led("yellow", count, seconds)
+
+    def blink_led(self, color: str, count: int, seconds: float) -> None:
+        led = self._leds[color]
         for _ in range(count):
-            self.yellow_on()
+            led.on()
             time.sleep(seconds)
-            self.yellow_off()
+            led.off()
             time.sleep(seconds)
 
     def all_off(self) -> None:
@@ -167,11 +179,19 @@ class FakeHardware:
         self.green_off()
 
     def blink_yellow(self, count: int, seconds: float) -> None:
+        self.blink_led("yellow", count, seconds)
+
+    def blink_led(self, color: str, count: int, seconds: float) -> None:
+        setter = {
+            "red": ("red_on", "red_off"),
+            "yellow": ("yellow_on", "yellow_off"),
+            "green": ("green_on", "green_off"),
+        }[color]
         for _ in range(count):
-            self.yellow_on()
+            getattr(self, setter[0])()
             if seconds:
                 time.sleep(seconds)
-            self.yellow_off()
+            getattr(self, setter[1])()
             if seconds:
                 time.sleep(seconds)
 

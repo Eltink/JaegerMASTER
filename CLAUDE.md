@@ -40,7 +40,7 @@ Off-Pi validation:
 ```bash
 python3 -m py_compile main.py Alles_Dabei.py Pumpe_und_Ventile.py ventil_toggle.py shot_dispenser/*.py tests/*.py
 python3 -m unittest discover -s tests
-python3 -m unittest tests.test_controller.ControllerTests.test_pvp_right_player_wins_after_green
+python3 -m unittest tests.test_controller.ControllerTests.test_pvp_right_player_wins_blinks_red
 ```
 
 There is no configured lint command.

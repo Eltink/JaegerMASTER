@@ -11,11 +11,13 @@ class Control(str, Enum):
     PUMP_4 = "pump_4"
     RANDOM_PUMP = "random_pump"
     ALL_PUMPS = "all_pumps"
+    RAFFLE = "raffle"
     PVP_START = "pvp_start"
     PLAYER_LEFT = "player_left"
     PLAYER_RIGHT = "player_right"
     STOP_ALL = "stop_all"
     SHUTDOWN = "shutdown"
+    RESTART = "restart"
 
 
 @dataclass(frozen=True)

@@ -71,6 +71,27 @@ class NumpadKeyMapperTests(unittest.TestCase):
         self.assertEqual(Control.STOP_ALL, stop.control)
         self.assertEqual(Control.SHUTDOWN, shutdown.control)
 
+    def test_maps_backspace_and_enter_chord_to_restart(self) -> None:
+        mapper = NumpadKeyMapper({"KEY_KPENTER": Control.STOP_ALL})
+
+        self.assertIsNone(mapper.map_key_event("KEY_BACKSPACE", KEY_PRESSED))
+        restart = mapper.map_key_event("KEY_KPENTER", KEY_PRESSED)
+
+        self.assertIsNotNone(restart)
+        assert restart is not None
+        self.assertEqual(Control.RESTART, restart.control)
+        self.assertTrue(restart.pressed)
+        self.assertIsNone(mapper.map_key_event("KEY_KPENTER", KEY_RELEASED))
+
+    def test_enter_alone_is_still_stop_all(self) -> None:
+        mapper = NumpadKeyMapper({"KEY_KPENTER": Control.STOP_ALL})
+
+        pressed = mapper.map_key_event("KEY_KPENTER", KEY_PRESSED)
+
+        self.assertIsNotNone(pressed)
+        assert pressed is not None
+        self.assertEqual(Control.STOP_ALL, pressed.control)
+
     def test_rejects_unexpected_key_value(self) -> None:
         mapper = NumpadKeyMapper({"KEY_KP1": Control.PUMP_1})
 

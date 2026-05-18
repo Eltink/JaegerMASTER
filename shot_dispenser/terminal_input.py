@@ -16,6 +16,7 @@ HOLDABLE_CONTROLS = {
     Control.PUMP_4,
     Control.RANDOM_PUMP,
     Control.ALL_PUMPS,
+    Control.RAFFLE,
 }
 
 
@@ -41,10 +42,13 @@ CONTROL_ALIASES = {
     "all-pumps": Control.ALL_PUMPS,
     "pump": Control.ALL_PUMPS,
     "pumps": Control.ALL_PUMPS,
-    "7": Control.PVP_START,
+    "+": Control.RAFFLE,
+    "raffle": Control.RAFFLE,
+    "sorteio": Control.RAFFLE,
+    "8": Control.PVP_START,
     "pvp": Control.PVP_START,
     "start": Control.PVP_START,
-    "8": Control.PLAYER_LEFT,
+    "7": Control.PLAYER_LEFT,
     "left": Control.PLAYER_LEFT,
     "left-player": Control.PLAYER_LEFT,
     "9": Control.PLAYER_RIGHT,

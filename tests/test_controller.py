@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 import random
+import threading
 import time
 import unittest
 
 from shot_dispenser.commands import Control, OperatorInput
 from shot_dispenser.config import TimingConfig
-from shot_dispenser.controller import RunningAction, ShotDispenserController
+from shot_dispenser.controller import (
+    PVP_DONE,
+    PvpState,
+    RunningAction,
+    ShotDispenserController,
+)
 from shot_dispenser.display import Display
 from shot_dispenser.events import RecordingEventPublisher
 from shot_dispenser.hardware import FakeHardware
@@ -44,9 +50,12 @@ class ControllerTests(unittest.TestCase):
                 pvp_red_seconds=0.01,
                 pvp_yellow_min_seconds=0.01,
                 pvp_yellow_max_seconds=0.01,
-                pvp_timeout_seconds=0.03,
+                pvp_timeout_seconds=0.05,
                 pvp_result_seconds=0.0,
                 wait_tick_seconds=0.001,
+                pump_max_seconds=0.2,
+                pvp_blink_count=1,
+                pvp_blink_seconds=0.0,
             ),
             publisher=self.publisher,
             rng=random.Random(1),
@@ -63,15 +72,62 @@ class ControllerTests(unittest.TestCase):
         self.assertIn(("pump_started", {"pump": 1}), self.publisher.events)
         self.assertIn(("pump_stopped", {"pump": 1}), self.publisher.events)
 
-    def test_overlapping_actions_are_rejected(self) -> None:
+    def test_multiple_pumps_run_concurrently(self) -> None:
         self.assertTrue(self.controller.start_pump(1))
         self.assertTrue(wait_for(lambda: self.hardware.pumps[0]))
 
-        self.assertFalse(self.controller.start_pump(2))
+        self.assertTrue(self.controller.start_pump(2))
+        self.assertTrue(wait_for(lambda: self.hardware.pumps[1]))
+
+        self.assertTrue(self.hardware.pumps[0])
+        self.assertTrue(self.hardware.pumps[1])
+
+        self.controller.stop_pump(1)
+        self.controller.stop_pump(2)
+        self.assertTrue(self.controller.join_idle())
+        self.assertFalse(any(self.hardware.pumps))
+
+    def test_duplicate_pump_press_is_ignored(self) -> None:
+        self.assertTrue(self.controller.start_pump(1))
+        self.assertTrue(wait_for(lambda: self.hardware.pumps[0]))
+
+        self.assertFalse(self.controller.start_pump(1))
 
         self.controller.stop_pump(1)
         self.assertTrue(self.controller.join_idle())
-        self.assertNotIn("pump_2_on", self.hardware.log)
+
+    def test_exclusive_action_rejected_while_pump_runs(self) -> None:
+        self.assertTrue(self.controller.start_pump(1))
+        self.assertTrue(wait_for(lambda: self.hardware.pumps[0]))
+
+        self.assertFalse(self.controller.start_all_pumps())
+
+        self.controller.stop_pump(1)
+        self.assertTrue(self.controller.join_idle())
+
+    def test_pump_safety_limit_stops_after_timeout(self) -> None:
+        self.assertTrue(self.controller.start_pump(1))
+        self.assertTrue(wait_for(lambda: self.hardware.pumps[0]))
+
+        # Never release the key: the 0.2s safety cut must stop it.
+        self.assertTrue(self.controller.join_idle(timeout=1.0))
+        self.assertFalse(any(self.hardware.pumps))
+        self.assertIn(("pump_limit", {"pump": 1}), self.publisher.events)
+
+    def test_raffle_runs_selected_pumps(self) -> None:
+        self.assertTrue(self.controller.start_raffle())
+        self.assertTrue(wait_for(lambda: any(self.hardware.pumps)))
+
+        self.controller.stop_raffle()
+        self.assertTrue(self.controller.join_idle())
+        self.assertFalse(any(self.hardware.pumps))
+        started = [
+            payload
+            for name, payload in self.publisher.events
+            if name == "raffle_started"
+        ]
+        self.assertEqual(1, len(started))
+        self.assertTrue(1 <= len(started[0]["pumps"]) <= 4)
 
     def test_all_pumps_run_until_release(self) -> None:
         self.assertTrue(self.controller.start_all_pumps())
@@ -103,7 +159,7 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(1, self.display.reset_count)
         self.assertEqual(("<reset>",), self.display.history[-2])
         self.assertEqual(
-            ("Mystery Shot Box", "Parada segura", "operator", ""),
+            ("JägerMASTER".center(20), "Block Bombas", "operator", ""),
             self.display.history[-1],
         )
 
@@ -130,59 +186,108 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual({1, 2, 3, 4}, set(first_round))
         self.assertEqual({1, 2, 3, 4}, set(second_round))
 
-    def test_pvp_false_start_resets_to_safe_state(self) -> None:
+    def _pass_pvp_test_phase(self) -> None:
         self.assertTrue(self.controller.start_pvp())
-
+        self.assertTrue(
+            wait_for(lambda: self.controller._pvp is not None)
+        )
         self.assertTrue(self.controller.player_pressed(1))
+        self.assertTrue(self.controller.player_pressed(2))
 
-        self.assertTrue(self.controller.join_idle())
-        self.assertFalse(self.hardware.red)
-        self.assertFalse(self.hardware.yellow)
-        self.assertFalse(self.hardware.green)
-        self.assertIn(("pvp_false_start", {"player": 1}), self.publisher.events)
+    def test_pvp_test_phase_lights_each_player_led(self) -> None:
+        self.assertTrue(self.controller.start_pvp())
+        self.assertTrue(wait_for(lambda: self.controller._pvp is not None))
+
+        self.controller.player_pressed(1)
+        self.assertTrue(wait_for(lambda: self.hardware.green))
+        self.controller.player_pressed(2)
+
+        self.assertTrue(self.controller.join_idle(timeout=2.0))
+        self.assertIn(("pvp_started", {}), self.publisher.events)
 
     def test_pvp_thread_exits_before_display_when_already_done(self) -> None:
-        action = RunningAction("pvp", self.controller._pvp_done)
-        self.controller._pvp_done.set()
+        action = RunningAction("pvp", threading.Event())
+        action.stop_event.set()
+        self.controller._pvp = PvpState()
 
         self.controller._run_pvp_game(action)
 
         self.assertEqual([], self.display.history)
         self.assertIn(("pvp_started", {}), self.publisher.events)
 
-    def test_pvp_turns_red_on_before_yellow_and_green(self) -> None:
-        self.assertTrue(self.controller.start_pvp())
+    def test_pvp_countdown_shows_red_then_yellow_then_go(self) -> None:
+        self._pass_pvp_test_phase()
+        self.assertTrue(self.controller.join_idle(timeout=2.0))
 
-        self.assertTrue(wait_for(lambda: "red_on" in self.hardware.log))
-        self.assertTrue(wait_for(lambda: "yellow_on" in self.hardware.log))
-        self.assertTrue(wait_for(lambda: "green_on" in self.hardware.log))
+        center = lambda text: text.center(20)
+        rows = self.display.history
 
-        self.assertLess(self.hardware.log.index("red_on"), self.hardware.log.index("yellow_on"))
-        self.assertLess(self.hardware.log.index("yellow_on"), self.hardware.log.index("green_on"))
+        def first_row(needle: str) -> int:
+            for index, row in enumerate(rows):
+                if needle in row:
+                    return index
+            return -1
 
-        self.assertTrue(self.controller.join_idle(timeout=1.0))
+        red = first_row(center(self.controller._messages.pvp_red))
+        yellow = first_row(center(self.controller._messages.pvp_yellow))
+        go = first_row(center(self.controller._messages.pvp_now))
+        self.assertNotEqual(-1, red)
+        self.assertNotEqual(-1, yellow)
+        self.assertNotEqual(-1, go)
+        self.assertLess(red, yellow)
+        self.assertLess(yellow, go)
 
-    def test_pvp_right_player_wins_after_green(self) -> None:
-        self.assertTrue(self.controller.start_pvp())
-        self.assertTrue(wait_for(lambda: self.hardware.green))
+    def test_pvp_right_player_wins_blinks_red(self) -> None:
+        self._pass_pvp_test_phase()
+        self.assertTrue(wait_for(lambda: self.controller._pvp is not None
+                                 and self.controller._pvp.green_at is not None))
 
         self.assertTrue(self.controller.player_pressed(2))
+        self.assertTrue(self.controller.player_pressed(1))
 
-        self.assertTrue(self.controller.join_idle())
-        self.assertFalse(self.hardware.red)
-        self.assertFalse(self.hardware.yellow)
+        self.assertTrue(self.controller.join_idle(timeout=2.0))
+        winner_events = [
+            payload
+            for name, payload in self.publisher.events
+            if name == "pvp_winner"
+        ]
+        self.assertEqual(1, len(winner_events))
+        self.assertEqual(2, winner_events[0]["player"])
+        self.assertTrue(self.hardware.red)
+        self.assertFalse(self.hardware.green)
+
+    def test_pvp_left_player_wins_blinks_green(self) -> None:
+        self._pass_pvp_test_phase()
+        self.assertTrue(wait_for(lambda: self.controller._pvp is not None
+                                 and self.controller._pvp.green_at is not None))
+
+        self.assertTrue(self.controller.player_pressed(1))
+        self.assertTrue(self.controller.player_pressed(2))
+
+        self.assertTrue(self.controller.join_idle(timeout=2.0))
         self.assertTrue(self.hardware.green)
-        self.assertIn(("pvp_winner", {"player": 2}), self.publisher.events)
+        self.assertFalse(self.hardware.red)
+        self.assertIsNotNone(self.controller.champion_ms())
 
     def test_pvp_timeout_returns_to_ready_state(self) -> None:
-        self.assertTrue(self.controller.start_pvp())
+        self._pass_pvp_test_phase()
 
-        self.assertTrue(self.controller.join_idle(timeout=1.0))
+        self.assertTrue(self.controller.join_idle(timeout=2.0))
 
         self.assertFalse(self.hardware.red)
         self.assertFalse(self.hardware.yellow)
         self.assertFalse(self.hardware.green)
         self.assertIn(("pvp_timeout", {}), self.publisher.events)
+
+    def test_pvp_play_again_after_done(self) -> None:
+        self._pass_pvp_test_phase()
+        self.assertTrue(self.controller.join_idle(timeout=2.0))
+
+        self.assertTrue(self.controller.start_pvp())
+        self.assertTrue(wait_for(lambda: self.controller._pvp is not None))
+        self.assertTrue(self.controller.player_pressed(1))
+        self.assertTrue(self.controller.player_pressed(2))
+        self.assertTrue(self.controller.join_idle(timeout=2.0))
 
 
 def wait_for(predicate, timeout: float = 1.0) -> bool:
