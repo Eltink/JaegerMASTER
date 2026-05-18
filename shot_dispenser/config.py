@@ -34,6 +34,7 @@ class TimingConfig:
     pvp_yellow_min_seconds: float = 0.1
     pvp_yellow_max_seconds: float = 4.0
     pvp_timeout_seconds: float = 10.0
+    pvp_second_press_seconds: float = 2.0
     pvp_result_seconds: float = 2.0
     wait_tick_seconds: float = 0.05
     pump_max_seconds: float = 5.0

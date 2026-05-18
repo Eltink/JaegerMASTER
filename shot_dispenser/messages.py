@@ -3,19 +3,20 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 
-# 20x4 main screen art. Lines are clipped to the display width by the display
-# layer, so trailing padding here is harmless.
+# 20x4 main screen art. ASCII only: the HD44780 LCD ROM has no accented or
+# musical glyphs and RPLCD raises on unmapped characters. Lines are clipped
+# to the display width by the display layer, so trailing padding is harmless.
 MAIN_ART: tuple[str, str, str, str] = (
-    "♪ \\o/ Jäger  \\o/ *",
+    "* \\o/ Jaeger \\o/ *",
     "   |  MASTER  |",
-    " */ \\        / \\  ♫",
+    " */ \\        / \\ *",
     "   Bora jogar?",
 )
 
 
 @dataclass(frozen=True)
 class OperatorMessages:
-    title: str = "JägerMASTER"
+    title: str = "JaegerMASTER"
     ready: str = "Pronto!"
     press_button: str = "Use o teclado..."
     busy: str = "Aguarde..."
@@ -30,7 +31,8 @@ class OperatorMessages:
     pump_limit: str = "Limite 5s atingido"
     release_key: str = "Solte a tecla!"
     booting: str = "Booting..."
-    boot_subtitle: str = "Um projeto de amor"
+    boot_credit_1: str = "Doug Gauzzi Marcone"
+    boot_credit_2: str = "Preus Michi A. & G."
     pvp_title: str = "===== Modo PvP ====="
     pvp_get_ready: str = "Preparem-se!"
     pvp_test_title: str = "Testem os botoes:"
@@ -54,7 +56,7 @@ class OperatorMessages:
     pvp_reaction_right: str = "Dir: {} ms"
     pvp_no_reaction: str = "--"
     pvp_champion: str = "Campeao 1h: {} ms"
-    pvp_restart: str = "KP8=jogar de novo"
+    pvp_restart: str = "KP8 = menu"
     input_error: str = "Erro no teclado"
     safe_stop: str = "Block Bombas"
     shutting_down: str = "Desligando"

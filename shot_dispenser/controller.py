@@ -297,9 +297,9 @@ class ShotDispenserController:
         self._hardware.pump_on(pump_number)
         self._display.show_lines(
             self._title(),
-            self._messages.random_pump.format(pump_number),
-            self._messages.release_key,
-            "",
+            self._center(self._messages.random_pump.format(pump_number)),
+            self._center(f">> Bomba {pump_number} <<"),
+            self._center(self._messages.release_key),
         )
         limited = self._wait_with_limit(stop_event)
         self._hardware.pump_off(pump_number)
@@ -354,17 +354,28 @@ class ShotDispenserController:
     def start_pvp(self) -> bool:
         action = RunningAction("pvp", threading.Event())
         with self._state_lock:
-            if self._pump_actions or (
-                self._exclusive is not None and self._exclusive.name != "pvp"
-            ):
-                self._show_busy()
-                return False
             current = self._pvp
-            if current is not None and current.phase != PVP_DONE:
+            if current is not None and current.phase == PVP_DONE:
+                # The result is on screen: KP8 acknowledges it, leaves PvP
+                # and re-enables pouring instead of starting a new round.
+                self._pvp = None
+                exit_pvp = True
+            elif current is not None:
                 # A round is already running; ignore extra KP8 presses.
                 return False
-            if self._exclusive is not None:
-                self._exclusive.stop_event.set()
+            else:
+                exit_pvp = False
+                if self._pump_actions or self._exclusive is not None:
+                    self._show_busy()
+                    return False
+        if exit_pvp:
+            self._hardware.traffic_light_off()
+            self.show_ready()
+            return True
+        with self._state_lock:
+            if self._pump_actions or self._exclusive is not None:
+                self._show_busy()
+                return False
             self._hardware.traffic_light_off()
             pvp = PvpState()
             self._pvp = pvp
@@ -482,7 +493,7 @@ class ShotDispenserController:
             self._center(self._messages.pvp_red),
             "",
         )
-        if self._pvp_wait(action, self._timing.pvp_red_seconds):
+        if not self._pvp_stage(action, self._timing.pvp_red_seconds):
             return False
 
         self._hardware.red_off()
@@ -497,23 +508,25 @@ class ShotDispenserController:
             self._timing.pvp_yellow_min_seconds,
             self._timing.pvp_yellow_max_seconds,
         )
-        if self._pvp_wait(action, yellow_delay):
+        if not self._pvp_stage(action, yellow_delay):
             return False
 
         self._hardware.yellow_off()
         with self._state_lock:
             pvp = self._pvp
-            if pvp is None or action.stop_event.is_set():
-                self._hardware.traffic_light_off()
-                return False
-            if pvp.false_start is not None:
-                player = pvp.false_start
-                self._handle_false_start(action, player)
-                return False
-            self._hardware.green_on()
-            pvp.green_at = time.monotonic()
-            pvp.phase = PVP_ARMED
-            pvp.changed.clear()
+            aborted = pvp is None or action.stop_event.is_set()
+            false_player = None if pvp is None else pvp.false_start
+            if not aborted and false_player is None:
+                self._hardware.green_on()
+                pvp.green_at = time.monotonic()
+                pvp.phase = PVP_ARMED
+                pvp.changed.clear()
+        if aborted:
+            self._hardware.traffic_light_off()
+            return False
+        if false_player is not None:
+            self._handle_false_start(action, false_player)
+            return False
         self._display.show_lines(
             self._messages.pvp_title,
             "",
@@ -522,37 +535,55 @@ class ShotDispenserController:
         )
         return True
 
-    def _pvp_wait(self, action: RunningAction, seconds: float) -> bool:
-        """Sleep up to `seconds`, aborting on stop or a false start."""
+    def _pvp_stage(self, action: RunningAction, seconds: float) -> bool:
+        """Run one countdown stage.
+
+        Returns True to continue the countdown, False to stop it (the stage
+        was aborted, or handled a false start itself).
+        """
         deadline = time.monotonic() + max(0.0, seconds)
         while True:
             with self._state_lock:
                 pvp = self._pvp
-                if pvp is None or action.stop_event.is_set():
-                    self._hardware.traffic_light_off()
-                    return True
-                if pvp.false_start is not None:
-                    return False
+                aborted = pvp is None or action.stop_event.is_set()
+                false_player = None if pvp is None else pvp.false_start
+            if aborted:
+                self._hardware.traffic_light_off()
+                return False
+            if false_player is not None:
+                self._handle_false_start(action, false_player)
+                return False
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                return False
+                return True
             pvp.changed.wait(timeout=min(remaining, self._timing.wait_tick_seconds))
             pvp.changed.clear()
 
     def _pvp_round(self, action: RunningAction) -> None:
         deadline = time.monotonic() + self._timing.pvp_timeout_seconds
+        first_press_at: float | None = None
         while True:
             with self._state_lock:
                 pvp = self._pvp
-                if pvp is None or action.stop_event.is_set():
-                    self._hardware.traffic_light_off()
-                    return
-                if pvp.false_start is not None:
-                    player = pvp.false_start
-                    self._handle_false_start(action, player)
-                    return
-                done = len(pvp.reactions) >= 2
-            if done or time.monotonic() >= deadline:
+                aborted = pvp is None or action.stop_event.is_set()
+                false_player = None if pvp is None else pvp.false_start
+                pressed = 0 if pvp is None else len(pvp.reactions)
+            if aborted:
+                self._hardware.traffic_light_off()
+                return
+            if false_player is not None:
+                self._handle_false_start(action, false_player)
+                return
+            now = time.monotonic()
+            if pressed >= 1 and first_press_at is None:
+                first_press_at = now
+            # Both reacted, the loser ran out of their grace window after the
+            # first press, or nobody pressed before the overall timeout.
+            grace_over = (
+                first_press_at is not None
+                and now - first_press_at >= self._timing.pvp_second_press_seconds
+            )
+            if pressed >= 2 or grace_over or now >= deadline:
                 self._finish_pvp(action)
                 return
             pvp.changed.wait(timeout=self._timing.wait_tick_seconds)
@@ -744,27 +775,16 @@ class ShotDispenserController:
 
     def play_boot_sequence(self, stop_event: threading.Event | None = None) -> None:
         stop_event = stop_event or threading.Event()
-        separator = "   *   "
-        ticker = separator.join(self._messages.credits) + separator
-        if len(ticker) < self._display.columns:
-            ticker = ticker + " " * self._display.columns
-        loop = ticker + ticker[: self._display.columns]
-
-        deadline = time.monotonic() + self._timing.boot_seconds
-        offset = 0
-        while time.monotonic() < deadline and not stop_event.is_set():
-            window = loop[offset : offset + self._display.columns]
-            remaining = max(0, int(deadline - time.monotonic()) + 1)
-            bar = ("#" * (self._display.columns - 0))[: max(1, remaining)]
-            self._display.show_lines(
-                self._title(),
-                self._center(self._messages.booting),
-                window,
-                bar[: self._display.columns],
-            )
-            offset = (offset + 1) % len(ticker)
-            if stop_event.wait(timeout=self._timing.boot_scroll_seconds):
-                break
+        # A single static screen for the whole boot window. The numpad runs
+        # on another thread, so an operator action can still repaint over
+        # this; the boot screen itself never repaints, so it cannot flicker.
+        self._display.show_lines(
+            self._title(),
+            self._center(self._messages.booting),
+            self._messages.boot_credit_1,
+            self._messages.boot_credit_2,
+        )
+        stop_event.wait(timeout=self._timing.boot_seconds)
         if not stop_event.is_set() and self.is_idle():
             self.show_ready()
 

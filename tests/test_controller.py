@@ -159,7 +159,7 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(1, self.display.reset_count)
         self.assertEqual(("<reset>",), self.display.history[-2])
         self.assertEqual(
-            ("JägerMASTER".center(20), "Block Bombas", "operator", ""),
+            ("JaegerMASTER".center(20), "Block Bombas", "operator", ""),
             self.display.history[-1],
         )
 
@@ -279,15 +279,66 @@ class ControllerTests(unittest.TestCase):
         self.assertFalse(self.hardware.green)
         self.assertIn(("pvp_timeout", {}), self.publisher.events)
 
-    def test_pvp_play_again_after_done(self) -> None:
+    def test_kp8_exits_finished_game_and_enables_pumps(self) -> None:
         self._pass_pvp_test_phase()
         self.assertTrue(self.controller.join_idle(timeout=2.0))
+        self.assertEqual(PVP_DONE, self.controller._pvp.phase)
 
+        # While the result is on screen, pumps are blocked.
+        self.assertFalse(self.controller.start_pump(1))
+
+        # KP8 acknowledges the result, leaves PvP and re-enables pouring.
         self.assertTrue(self.controller.start_pvp())
+        self.assertIsNone(self.controller._pvp)
+        self.assertEqual(self.controller._messages.main_art, self.display.history[-1])
+
+        self.assertTrue(self.controller.start_pump(1))
+        self.controller.stop_pump(1)
+        self.assertTrue(self.controller.join_idle())
+
+    def test_kp8_from_idle_starts_a_fresh_game(self) -> None:
+        self._pass_pvp_test_phase()
+        self.assertTrue(self.controller.join_idle(timeout=2.0))
+        self.assertTrue(self.controller.start_pvp())  # exit
+        self.assertIsNone(self.controller._pvp)
+
+        self.assertTrue(self.controller.start_pvp())  # fresh game
         self.assertTrue(wait_for(lambda: self.controller._pvp is not None))
         self.assertTrue(self.controller.player_pressed(1))
         self.assertTrue(self.controller.player_pressed(2))
         self.assertTrue(self.controller.join_idle(timeout=2.0))
+
+    def test_pvp_false_start_during_red_is_immediate(self) -> None:
+        slow = ShotDispenserController(
+            hardware=self.hardware,
+            display=self.display,
+            timing=TimingConfig(
+                message_pause_seconds=0.0,
+                pvp_red_seconds=5.0,
+                pvp_yellow_min_seconds=5.0,
+                pvp_yellow_max_seconds=5.0,
+                pvp_timeout_seconds=5.0,
+                pvp_result_seconds=0.0,
+                wait_tick_seconds=0.001,
+                pvp_blink_count=1,
+                pvp_blink_seconds=0.0,
+            ),
+            publisher=self.publisher,
+            rng=random.Random(1),
+        )
+        self.assertTrue(slow.start_pvp())
+        slow.player_pressed(1)
+        slow.player_pressed(2)
+        self.assertTrue(
+            wait_for(lambda: slow._pvp is not None
+                     and slow._pvp.phase == "countdown")
+        )
+
+        slow.player_pressed(1)  # jump the gun during the long red stage
+
+        self.assertTrue(slow.join_idle(timeout=2.0))
+        self.assertIn(("pvp_false_start", {"player": 1}), self.publisher.events)
+        self.assertEqual(PVP_DONE, slow._pvp.phase)
 
 
 def wait_for(predicate, timeout: float = 1.0) -> bool:
