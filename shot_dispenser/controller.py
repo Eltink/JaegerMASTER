@@ -443,6 +443,8 @@ class ShotDispenserController:
             pvp = self._pvp
         if pvp is None or self._pvp_aborted(action):
             return False
+        last_left: bool | None = None
+        last_right: bool | None = None
         while True:
             with self._state_lock:
                 pvp = self._pvp
@@ -450,28 +452,31 @@ class ShotDispenserController:
                     return False
                 left = pvp.left_tested
                 right = pvp.right_tested
-            self._hardware.green_off()
-            self._hardware.red_off()
-            if left:
-                self._hardware.green_on()
-            if right:
-                self._hardware.red_on()
-            self._display.show_lines(
-                self._messages.pvp_test_title,
-                self._messages.pvp_test_left
-                + (
-                    " " + self._messages.pvp_test_ok
-                    if left
-                    else ""
-                ),
-                self._messages.pvp_test_right
-                + (
-                    " " + self._messages.pvp_test_ok
-                    if right
-                    else ""
-                ),
-                "",
-            )
+            if left != last_left or right != last_right:
+                last_left = left
+                last_right = right
+                self._hardware.green_off()
+                self._hardware.red_off()
+                if left:
+                    self._hardware.green_on()
+                if right:
+                    self._hardware.red_on()
+                self._display.show_lines(
+                    self._messages.pvp_test_title,
+                    self._messages.pvp_test_left
+                    + (
+                        " " + self._messages.pvp_test_ok
+                        if left
+                        else ""
+                    ),
+                    self._messages.pvp_test_right
+                    + (
+                        " " + self._messages.pvp_test_ok
+                        if right
+                        else ""
+                    ),
+                    "",
+                )
             if left and right:
                 self._hardware.traffic_light_off()
                 return True
