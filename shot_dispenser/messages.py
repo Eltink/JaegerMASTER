@@ -7,10 +7,10 @@ from dataclasses import dataclass, field
 # musical glyphs and RPLCD raises on unmapped characters. Lines are clipped
 # to the display width by the display layer, so trailing padding is harmless.
 MAIN_ART: tuple[str, str, str, str] = (
-    "* \\o/ Jaeger \\o/ *",
-    "   |  MASTER  |",
-    " */ \\        / \\ *",
-    "   Bora jogar?",
+    "  * JaegerMASTER *  ",
+    " \\o/  \\o/  \\o/  \\o/ ",
+    "  |    |    |    |  ",
+    "    Bora jogar?     ",
 )
 
 
