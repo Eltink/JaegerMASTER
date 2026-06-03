@@ -66,8 +66,8 @@ class NumpadConfig:
     device_path: str | None = None
     device_name_contains: str | None = None
     grab_input: bool = True
-    shutdown_chord: tuple[str, str] = ("KEY_BACKSPACE", "KEY_KP0")
-    restart_chord: tuple[str, str] = ("KEY_BACKSPACE", "KEY_KPENTER")
+    shutdown_chord: tuple[str, str] = ("KEY_KP0", "KEY_KPASTERISK")
+    restart_chord: tuple[str, str] = ("KEY_KP0", "KEY_KPENTER")
     key_bindings: dict[str, Control] = field(
         default_factory=lambda: dict(DEFAULT_KEY_BINDINGS)
     )
