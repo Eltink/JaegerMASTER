@@ -22,6 +22,9 @@ class FakeLcd:
             raise OSError("i2c write failed")
         self.writes.append(value)
 
+    def create_char(self, location: int, bitmap: tuple) -> None:
+        pass
+
     def close(self, clear: bool = False) -> None:
         self.closed = True
 

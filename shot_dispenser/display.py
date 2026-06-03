@@ -12,6 +12,10 @@ except ImportError:  # Python < 3.8
 
 from .config import LcdConfig
 
+# HD44780 ROM A00 maps 0x5C to ¥ instead of \. We occupy CGRAM slot 0 with a
+# proper backslash bitmap so that \ in display strings renders correctly.
+_BACKSLASH_BITMAP = (0x10, 0x08, 0x04, 0x02, 0x01, 0x00, 0x00, 0x00)
+
 
 class Display(Protocol):
     columns: int
@@ -72,7 +76,7 @@ class LcdDisplay:
                 lcd.clear()
                 for row, line in enumerate(normalized):
                     lcd.cursor_pos = (row, 0)
-                    lcd.write_string(line[: self.columns])
+                    lcd.write_string(line[: self.columns].replace("\\", "\x00"))
             except OSError as exc:
                 self._mark_lcd_failed("write", lcd, exc)
 
@@ -115,6 +119,10 @@ class LcdDisplay:
             self._report_error("open", exc)
             return None
         self._last_error = None
+        try:
+            lcd.create_char(0, _BACKSLASH_BITMAP)
+        except OSError as exc:
+            self._report_error("create_char", exc)
         return lcd
 
     def _mark_lcd_failed(self, action: str, lcd, exc: OSError) -> None:
