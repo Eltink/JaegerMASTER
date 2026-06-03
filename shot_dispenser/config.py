@@ -56,7 +56,7 @@ DEFAULT_KEY_BINDINGS: dict[str, Control] = {
     "KEY_KP7": Control.PLAYER_LEFT,
     "KEY_KP8": Control.PVP_START,
     "KEY_KP9": Control.PLAYER_RIGHT,
-    "KEY_KPENTER": Control.STOP_ALL,
+    "KEY_KP0": Control.STOP_ALL,
 }
 
 
