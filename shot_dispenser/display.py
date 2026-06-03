@@ -16,6 +16,9 @@ from .config import LcdConfig
 # proper backslash bitmap so that \ in display strings renders correctly.
 _BACKSLASH_BITMAP = (0x10, 0x08, 0x04, 0x02, 0x01, 0x00, 0x00, 0x00)
 
+# Eighth-note ♪ in CGRAM slot 1 (not in ROM A00).
+_NOTE_BITMAP = (0x0C, 0x0E, 0x0C, 0x08, 0x08, 0x18, 0x18, 0x00)
+
 
 class Display(Protocol):
     columns: int
@@ -76,7 +79,11 @@ class LcdDisplay:
                 lcd.clear()
                 for row, line in enumerate(normalized):
                     lcd.cursor_pos = (row, 0)
-                    lcd.write_string(line[: self.columns].replace("\\", "\x00"))
+                    lcd.write_string(
+                        line[: self.columns]
+                        .replace("\\", "\x00")
+                        .replace("♪", "\x01")
+                    )
             except OSError as exc:
                 self._mark_lcd_failed("write", lcd, exc)
 
@@ -121,6 +128,7 @@ class LcdDisplay:
         self._last_error = None
         try:
             lcd.create_char(0, _BACKSLASH_BITMAP)
+            lcd.create_char(1, _NOTE_BITMAP)
         except OSError as exc:
             self._report_error("create_char", exc)
         return lcd
