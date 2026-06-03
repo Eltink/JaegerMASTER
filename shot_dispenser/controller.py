@@ -370,7 +370,10 @@ class ShotDispenserController:
                 do_exit = True
             elif current is not None:
                 # Result screen (PVP_DONE) → clear state and restart below.
+                # Also clear _exclusive so the second lock check passes even
+                # while the game thread is still finishing its blink sequence.
                 self._pvp = None
+                self._exclusive = None
                 do_exit = False
             else:
                 do_exit = False
