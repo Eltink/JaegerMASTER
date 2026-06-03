@@ -134,7 +134,16 @@ class ShotDispenserController:
             raise ValueError(f"Unknown pump {pump_number}")
         action = RunningAction(f"pump-{pump_number}", threading.Event())
         with self._state_lock:
-            if self._exclusive is not None or self._pvp is not None:
+            if self._pvp is not None:
+                # Exit PvP immediately and proceed with the pump press.
+                old_pvp = self._pvp
+                old_exclusive = self._exclusive
+                self._pvp = None
+                self._exclusive = None
+                old_pvp.changed.set()
+                if old_exclusive is not None:
+                    old_exclusive.stop_event.set()
+            elif self._exclusive is not None:
                 self._show_busy()
                 return False
             if pump_number in self._pump_actions:
@@ -435,12 +444,15 @@ class ShotDispenserController:
                 return
             self._pvp_round(action)
         finally:
+            own = False
             with self._state_lock:
                 if self._exclusive is action:
                     self._exclusive = None
                     if action.stop_event.is_set():
                         self._pvp = None
-            self._hardware.all_pumps_off()
+                    own = True
+            if own:
+                self._hardware.all_pumps_off()
 
     def _pvp_test_phase(self, action: RunningAction) -> bool:
         with self._state_lock:

@@ -320,13 +320,23 @@ class ControllerTests(unittest.TestCase):
         self.assertTrue(self.controller.join_idle(timeout=2.0))
         self.assertEqual(PVP_DONE, self.controller._pvp.phase)
 
-        # While the result is on screen, pumps are blocked.
-        self.assertFalse(self.controller.start_pump(1))
-
         # KP8 on the result screen starts a new round instead of exiting.
         self.assertTrue(self.controller.start_pvp())
         self.assertTrue(wait_for(lambda: self.controller._pvp is not None
                                  and self.controller._pvp.phase == "test"))
+
+    def test_pump_button_during_pvp_exits_pvp_and_runs_pump(self) -> None:
+        self.assertTrue(self.controller.start_pvp())
+        self.assertTrue(wait_for(lambda: self.controller._pvp is not None))
+
+        # Pump key while PvP is active: exits PvP and dispenses.
+        self.assertTrue(self.controller.start_pump(1))
+        self.assertIsNone(self.controller._pvp)
+        self.assertTrue(wait_for(lambda: self.hardware.pumps[0]))
+
+        self.controller.stop_pump(1)
+        self.assertTrue(self.controller.join_idle())
+        self.assertFalse(any(self.hardware.pumps))
 
     def test_kp8_during_pvp_exits_and_enables_pumps(self) -> None:
         self.assertTrue(self.controller.start_pvp())
