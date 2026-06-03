@@ -7,9 +7,9 @@ from dataclasses import dataclass, field
 # musical glyphs and RPLCD raises on unmapped characters. Lines are clipped
 # to the display width by the display layer, so trailing padding is harmless.
 MAIN_ART: tuple[str, str, str, str] = (
-    "* \\o/ Jaeger \\o/ *",
+    "* /o/ Jaeger /o/ *",
     "   |  MASTER  |",
-    " */ \\        / \\ *",
+    " */ /        / / *",
     "   Bora jogar?",
 )
 
@@ -56,7 +56,8 @@ class OperatorMessages:
     pvp_reaction_right: str = "Dir: {} ms"
     pvp_no_reaction: str = "--"
     pvp_champion: str = "Campeao 1h: {} ms"
-    pvp_restart: str = "KP8 = menu"
+    pvp_waiting: str = "Aguardando..."
+    pvp_restart: str = "KP8 = novo jogo"
     input_error: str = "Erro no teclado"
     safe_stop: str = "Block Bombas"
     shutting_down: str = "Desligando"

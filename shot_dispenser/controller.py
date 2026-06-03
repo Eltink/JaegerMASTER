@@ -352,26 +352,30 @@ class ShotDispenserController:
     # ----- PvP -----------------------------------------------------------
 
     def start_pvp(self) -> bool:
-        action = RunningAction("pvp", threading.Event())
         with self._state_lock:
             current = self._pvp
-            if current is not None and current.phase == PVP_DONE:
-                # The result is on screen: KP8 acknowledges it, leaves PvP
-                # and re-enables pouring instead of starting a new round.
+            if current is not None and current.phase != PVP_DONE:
+                # Active round → exit PvP; the game thread's finally clears _exclusive.
                 self._pvp = None
-                exit_pvp = True
+                current.changed.set()
+                do_exit = True
             elif current is not None:
-                # A round is already running; ignore extra KP8 presses.
-                return False
+                # Result screen (PVP_DONE) → clear state and restart below.
+                self._pvp = None
+                do_exit = False
             else:
-                exit_pvp = False
+                do_exit = False
                 if self._pump_actions or self._exclusive is not None:
                     self._show_busy()
                     return False
-        if exit_pvp:
+
+        if do_exit:
             self._hardware.traffic_light_off()
             self.show_ready()
             return True
+
+        # Start a new PvP round (fresh start or restart after done).
+        action = RunningAction("pvp", threading.Event())
         with self._state_lock:
             if self._pump_actions or self._exclusive is not None:
                 self._show_busy()
@@ -567,6 +571,7 @@ class ShotDispenserController:
     def _pvp_round(self, action: RunningAction) -> None:
         deadline = time.monotonic() + self._timing.pvp_timeout_seconds
         first_press_at: float | None = None
+        last_pressed = 0
         while True:
             with self._state_lock:
                 pvp = self._pvp
@@ -582,6 +587,14 @@ class ShotDispenserController:
             now = time.monotonic()
             if pressed >= 1 and first_press_at is None:
                 first_press_at = now
+            if pressed == 1 and last_pressed == 0:
+                self._display.show_lines(
+                    self._messages.pvp_title,
+                    "",
+                    self._center(self._messages.pvp_waiting),
+                    "",
+                )
+            last_pressed = pressed
             # Both reacted, the loser ran out of their grace window after the
             # first press, or nobody pressed before the overall timeout.
             grace_over = (

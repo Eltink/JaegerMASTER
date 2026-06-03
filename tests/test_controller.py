@@ -268,7 +268,11 @@ class ControllerTests(unittest.TestCase):
         self.assertTrue(self.controller.join_idle(timeout=2.0))
 
         # Also exercise the raffle and random pump screens.
-        self.controller.start_pvp()  # leave PvP so pumps are enabled
+        # Exit PvP by pressing KP8 during the newly-restarted test phase.
+        self.controller.start_pvp()  # restarts a new round
+        self.assertTrue(wait_for(lambda: self.controller._pvp is not None))
+        self.controller.start_pvp()  # exits the active round
+        self.assertTrue(self.controller.join_idle(timeout=1.0))
         self.assertTrue(self.controller.start_raffle())
         self.assertTrue(wait_for(lambda: any(self.hardware.pumps)))
         self.controller.stop_raffle()
@@ -311,7 +315,7 @@ class ControllerTests(unittest.TestCase):
         self.assertFalse(self.hardware.green)
         self.assertIn(("pvp_timeout", {}), self.publisher.events)
 
-    def test_kp8_exits_finished_game_and_enables_pumps(self) -> None:
+    def test_kp8_on_done_screen_restarts_game(self) -> None:
         self._pass_pvp_test_phase()
         self.assertTrue(self.controller.join_idle(timeout=2.0))
         self.assertEqual(PVP_DONE, self.controller._pvp.phase)
@@ -319,22 +323,28 @@ class ControllerTests(unittest.TestCase):
         # While the result is on screen, pumps are blocked.
         self.assertFalse(self.controller.start_pump(1))
 
-        # KP8 acknowledges the result, leaves PvP and re-enables pouring.
+        # KP8 on the result screen starts a new round instead of exiting.
         self.assertTrue(self.controller.start_pvp())
+        self.assertTrue(wait_for(lambda: self.controller._pvp is not None
+                                 and self.controller._pvp.phase == "test"))
+
+    def test_kp8_during_pvp_exits_and_enables_pumps(self) -> None:
+        self.assertTrue(self.controller.start_pvp())
+        self.assertTrue(wait_for(lambda: self.controller._pvp is not None))
+
+        # KP8 during an active game exits PvP and re-enables pouring.
+        self.assertTrue(self.controller.start_pvp())
+        self.assertTrue(self.controller.join_idle(timeout=1.0))
         self.assertIsNone(self.controller._pvp)
-        self.assertEqual(self.controller._messages.main_art, self.display.history[-1])
 
         self.assertTrue(self.controller.start_pump(1))
         self.controller.stop_pump(1)
         self.assertTrue(self.controller.join_idle())
 
     def test_kp8_from_idle_starts_a_fresh_game(self) -> None:
-        self._pass_pvp_test_phase()
-        self.assertTrue(self.controller.join_idle(timeout=2.0))
-        self.assertTrue(self.controller.start_pvp())  # exit
         self.assertIsNone(self.controller._pvp)
 
-        self.assertTrue(self.controller.start_pvp())  # fresh game
+        self.assertTrue(self.controller.start_pvp())
         self.assertTrue(wait_for(lambda: self.controller._pvp is not None))
         self.assertTrue(self.controller.player_pressed(1))
         self.assertTrue(self.controller.player_pressed(2))
