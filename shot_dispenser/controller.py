@@ -243,11 +243,11 @@ class ShotDispenserController:
 
     def _raffle_pumps(self) -> list[int]:
         roll = self._rng.random()
-        if roll < 0.60:
+        if roll < 0.45:
             count = len(self._pump_numbers)
-        elif roll < 0.80:
+        elif roll < 0.70:
             count = 3
-        elif roll < 0.90:
+        elif roll < 0.85:
             count = 2
         else:
             count = 1
